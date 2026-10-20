@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 15:43:11 -0400
+Subject: [PATCH] Draw the custom cursor in the main menu, load screen and
+ party creation
+
+With OE_GAMEPAD_TOUCHPAD_MOUSE there's no system cursor, and only the game loop and the game menu drew the game's
+own: in the main menu, its load screen, the credits and party creation the cursor was invisible, so neither the
+touchpad nor the d-pad menu navigation could be followed there.
+
+Mouse look now only comes back when the game's own interface is the one window, as the comment says, not with any
+single window such as the main menu.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Application/Game.cpp       | 5 +++++
+ src/GUI/UI/UIPartyCreation.cpp | 3 +++
+ src/Io/Mouse.cpp               | 2 +-
+ 3 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/Application/Game.cpp b/src/Application/Game.cpp
+index 9b64aa4..a2d4b56 100644
+--- a/src/Application/Game.cpp
++++ b/src/Application/Game.cpp
+@@ -142,6 +142,11 @@ int Game::run() {
+                 // This method should be interpreted as a future RetainedUISystem::update()
+                 // It does update all the GUIWindow alive + it does various hacks
+                 GUI_UpdateWindows();
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++                // No system cursor to show in the main menu, load screen and credits, the game draws its own.
++                if (current_screen_type != SCREEN_VIDEO)
++                    mouse->DrawCursor();
++#endif
+                 render->flushAndScale();
+                 engine->drawOverlay();
+                 render->swapBuffers();
+diff --git a/src/GUI/UI/UIPartyCreation.cpp b/src/GUI/UI/UIPartyCreation.cpp
+index 284caaf..59a3f6a 100644
+--- a/src/GUI/UI/UIPartyCreation.cpp
++++ b/src/GUI/UI/UIPartyCreation.cpp
+@@ -725,6 +725,9 @@ bool PartyCreationUI_LoopInternal() {
+         CreateParty_EventLoop();
+         render->BeginScene2D();
+         GUI_UpdateWindows();
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++        mouse->DrawCursor(); // No system cursor, the game draws its own.
++#endif
+         render->Present();
+         if (uGameState ==
+             GAME_FINISHED) {  // if click Esc in PlayerCreation Window
+diff --git a/src/Io/Mouse.cpp b/src/Io/Mouse.cpp
+index 33f9546..a665a18 100644
+--- a/src/Io/Mouse.cpp
++++ b/src/Io/Mouse.cpp
+@@ -131,7 +131,7 @@ void Io::Mouse::DrawCursor() {
+     Pointi pos = this->position();
+ 
+     // manage mouse look state - if only game screen is active and no overlay (console) is open, try enable
+-    if (lWindowList.size() == 1 && !engine->isOverlayOpen())
++    if (lWindowList.size() == 1 && lWindowList.front() == pPrimaryWindow.get() && !engine->isOverlayOpen())
+         RestoreMouseLook();
+     else
+         SetMouseLook(Suspended);
