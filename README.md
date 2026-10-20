@@ -3,10 +3,11 @@
 A native PlayStation 5 homebrew port of [OpenEnroth](https://github.com/OpenEnroth/OpenEnroth), the open-source
 reimplementation of the Might and Magic VI–VIII engine. It runs **Might and Magic VII** as a home-screen title on
 a jailbroken PS5: native x86-64 code, OpenGL 4.6 on the console's GPU, DualSense input and console audio. No
-emulation or Wine. Might and Magic VI support is the next goal.
+emulation or Wine. Might and Magic VI is a separate port (`mm6-ps5`) on OpenEnroth's MM6 branch.
 
-> **Status: early.** It boots into the game and plays, but controller support is incomplete: the sticks don't
-> work yet and there is no cursor for the inventory, spellbook, shops or dialogue.
+> **Status: playable.** The game can be played with the DualSense: the sticks move and
+> look, the touchpad is the mouse, and the D-pad moves through menus, the inventory and shops. The sticks are still
+> digital (one speed), and there's no on-screen keyboard for typing names yet.
 
 Bring your own game files: nothing from Might and Magic is included.
 
