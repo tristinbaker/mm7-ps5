@@ -1,0 +1,130 @@
+From 6f2393a9bbabb519db9b4208ddce5372e2b0481b Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 13:40:52 -0400
+Subject: [PATCH 4/4] Track gamepad buttons and sticks in KeyboardController
+
+Gameplay actions check KeyboardController for both their keyboard and their gamepad binding, but it only
+listened to keyboard events. Continuously triggered actions bound to the gamepad (walking, turning, looking)
+therefore never fired, and the sticks did nothing. Gamepad buttons are now tracked like keys, and each stick or
+trigger direction is down while past the same 0.5 threshold GameWindowHandler uses. Both directions of an axis
+are updated on every event, so a stick crossing to the other side in one event can't leave a key held.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Io/KeyboardController.cpp | 68 +++++++++++++++++++++++++++++++----
+ src/Io/KeyboardController.h   |  7 ++++
+ 2 files changed, 68 insertions(+), 7 deletions(-)
+
+diff --git a/src/Io/KeyboardController.cpp b/src/Io/KeyboardController.cpp
+index 1eab049..aa97c81 100644
+--- a/src/Io/KeyboardController.cpp
++++ b/src/Io/KeyboardController.cpp
+@@ -2,7 +2,25 @@
+ 
+ #include "Library/Platform/Interface/PlatformEvents.h"
+ 
+-KeyboardController::KeyboardController() : PlatformEventFilter({EVENT_KEY_PRESS, EVENT_KEY_RELEASE}) {}
++// Gamepad sticks and triggers are bound like keys, one key per direction (e.g. KEY_GAMEPAD_LEFTSTICK_UP).
++// TODO(captainurist): same fixed deadzone as GameWindowHandler::gamepadAxisEvent, until axes get proper analog handling.
++static constexpr float GAMEPAD_AXIS_THRESHOLD = 0.5f;
++
++// Axis events carry the key for the axis' positive direction, see translateSdlGamepadAxis.
++static PlatformKey negativeAxisKey(PlatformKey positiveKey) {
++    switch (positiveKey) {
++    case PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT:  return PlatformKey::KEY_GAMEPAD_LEFTSTICK_LEFT;
++    case PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN:   return PlatformKey::KEY_GAMEPAD_LEFTSTICK_UP;
++    case PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT: return PlatformKey::KEY_GAMEPAD_RIGHTSTICK_LEFT;
++    case PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN:  return PlatformKey::KEY_GAMEPAD_RIGHTSTICK_UP;
++    default:                                        return PlatformKey::KEY_NONE; // Triggers only go one way.
++    }
++}
++
++// Gamepad events are tracked too: gameplay actions bound to gamepad keys check these states, and without them the
++// continuously triggered ones (walking, turning, looking) never fired for gamepads.
++KeyboardController::KeyboardController() : PlatformEventFilter({EVENT_KEY_PRESS, EVENT_KEY_RELEASE, EVENT_GAMEPAD_KEY_PRESS,
++                                                                EVENT_GAMEPAD_KEY_RELEASE, EVENT_GAMEPAD_AXIS}) {}
+ 
+ bool KeyboardController::isKeyPressedThisFrame(PlatformKey key) const {
+     if (key == PlatformKey::KEY_NONE)
+@@ -19,19 +37,55 @@ bool KeyboardController::isKeyDownThisFrame(PlatformKey key) const {
+ }
+ 
+ bool KeyboardController::keyPressEvent(const PlatformKeyEvent *event) {
+-    if (_isKeyDown[event->key])
+-        return false; // Auto repeat
+-
+-    _isKeyDown[event->key] = true;
+-    _isKeyPressedThisFrame[event->key] = true;
++    pressKey(event->key);
+     return false;
+ }
+ 
+ bool KeyboardController::keyReleaseEvent(const PlatformKeyEvent *event) {
+-    _isKeyDown[event->key] = false;
++    releaseKey(event->key);
++    return false;
++}
++
++bool KeyboardController::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
++    pressKey(event->key);
++    return false;
++}
++
++bool KeyboardController::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) {
++    releaseKey(event->key);
+     return false;
+ }
+ 
++bool KeyboardController::gamepadAxisEvent(const PlatformGamepadAxisEvent *event) {
++    // Both directions are updated on every event, so a stick that jumps from one side to the other between two events
++    // doesn't leave the first direction held.
++    setKeyDown(event->axis, event->value >= GAMEPAD_AXIS_THRESHOLD);
++    PlatformKey negativeKey = negativeAxisKey(event->axis);
++    if (negativeKey != PlatformKey::KEY_NONE)
++        setKeyDown(negativeKey, event->value <= -GAMEPAD_AXIS_THRESHOLD);
++    return false;
++}
++
++void KeyboardController::pressKey(PlatformKey key) {
++    if (_isKeyDown[key])
++        return; // Auto repeat, or a stick that is still past the threshold.
++
++    _isKeyDown[key] = true;
++    _isKeyPressedThisFrame[key] = true;
++}
++
++void KeyboardController::releaseKey(PlatformKey key) {
++    _isKeyDown[key] = false;
++}
++
++void KeyboardController::setKeyDown(PlatformKey key, bool down) {
++    if (down) {
++        pressKey(key);
++    } else {
++        releaseKey(key);
++    }
++}
++
+ void KeyboardController::processMessages(PlatformEventHandler *eventHandler) {
+     _isKeyPressedThisFrame.fill(false);
+     ProxyEventLoop::processMessages(eventHandler);
+diff --git a/src/Io/KeyboardController.h b/src/Io/KeyboardController.h
+index 58e5171..5455c3c 100644
+--- a/src/Io/KeyboardController.h
++++ b/src/Io/KeyboardController.h
+@@ -28,8 +28,15 @@ class KeyboardController: public PlatformEventFilter, public ProxyEventLoop {
+  private:
+     virtual bool keyPressEvent(const PlatformKeyEvent *event) override;
+     virtual bool keyReleaseEvent(const PlatformKeyEvent *event) override;
++    virtual bool gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) override;
++    virtual bool gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) override;
++    virtual bool gamepadAxisEvent(const PlatformGamepadAxisEvent *event) override;
+     virtual void processMessages(PlatformEventHandler *eventHandler) override;
+ 
++    void pressKey(PlatformKey key);
++    void releaseKey(PlatformKey key);
++    void setKeyDown(PlatformKey key, bool down);
++
+  private:
+     /** Whether the key is currently held down. */
+     IndexedArray<bool, PlatformKey::KEY_FIRST, PlatformKey::KEY_LAST> _isKeyDown = {{}};

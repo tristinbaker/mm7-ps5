@@ -1,7 +1,7 @@
 From b19e8a7d29616a01953b7332e943d1a4ff526e7d Mon Sep 17 00:00:00 2001
 From: Tristin Baker <tristinbaker@protonmail.com>
 Date: Tue, 20 Oct 2026 12:56:51 -0400
-Subject: [PATCH 2/3] Add an SDL2 platform backend, selected with OE_USE_SDL2
+Subject: [PATCH 2/4] Add an SDL2 platform backend, selected with OE_USE_SDL2
 
 src/Library/Platform/Sdl2 implements the platform interface against SDL 2.30 for platforms that only
 have SDL2, such as the PS5 homebrew SDK. It is a port of the SDL3 backend, which stays the default and is

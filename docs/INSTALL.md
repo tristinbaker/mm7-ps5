@@ -35,17 +35,31 @@ and saves stay where they are.
 
 ## Controls (current)
 
-Controller support is still in progress. What works today is OpenEnroth's built-in gamepad mapping:
+Controller support is still in progress.
 
-| | |
-| --- | --- |
-| Main menu | Cross: New Game, Square: Load Game, Triangle: Credits, Circle: Exit |
-| Combat | L1: attack, R1: quick-cast, D-pad Down: cast |
-| Books | D-pad Up: notes, Left: map, Right: quests |
-| Other | Triangle: jump, Options: turn-based mode, Create: rest |
+| Button | In the game | In menus and dialogs |
+| --- | --- | --- |
+| Left stick | Walk, strafe | |
+| Right stick | Turn, look up and down | |
+| Cross | Interact: talk, open, pick up | Select, New Game |
+| Circle | Back / game menu | Back, Exit |
+| Square | Attack | Load Game |
+| Triangle | Jump; fly up while flying | Save Game, Credits |
+| L1 | Spellbook | |
+| R1 | Quick spell | Options |
+| L2 | Fly down | |
+| R2 | Turn-based mode on/off | |
+| L3 (press left stick) | Always run on/off | |
+| R3 (press right stick) | Pass the turn (turn-based mode) | |
+| Options | Inventory | |
+| Create | Rest | Rest 8 hours (in the rest menu) |
+| D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move between choices |
 
-Known problems: the sticks don't move or turn yet, and there is no cursor, so inventory, spellbook, shops and
-dialogue need more than the controller can currently do.
+Known problems: there is no cursor yet, so the inventory, spellbook, shops and parts of dialogs need more than the
+controller can currently do. The sticks work like keys (walk or don't, turn at one speed) rather than analog.
+
+The layout is written to the game's configuration when the title starts. You can change bindings in the game's
+controls menu; a release that changes the layout replaces the gamepad bindings once.
 
 ## Saves and settings
 
