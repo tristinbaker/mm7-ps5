@@ -22,7 +22,7 @@ Builds on x86-64 Linux. You need:
 - **LLVM 21** clang, lld and llvm (the toolchain the PS5 OpenGL driver was validated with).
   Arch: `pacman -S clang21 lld21 llvm21`. Debian/Ubuntu: `clang-21 lld-21 llvm-21` from apt.llvm.org, and set
   `LLVM21=/usr/lib/llvm-21` in `config.local.sh`.
-- git, curl, wget, unzip, zip, make, cmake (3.27+), ninja, python3 with venv, gcc, bison, flex,
+- git, curl, wget, unzip, make, cmake (3.27+), ninja, python3 with venv, gcc, bison, flex,
   glslangValidator, spirv-tools.
 - About 15 GB of disk space.
 

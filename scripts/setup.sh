@@ -51,7 +51,7 @@ checkout_commit() {
 
 say "Checking host tools"
 missing=()
-for tool in git curl wget unzip zip make cmake ninja python3 gcc bison flex glslangValidator spirv-val tar sha256sum; do
+for tool in git curl wget unzip make cmake ninja python3 gcc bison flex glslangValidator spirv-val tar sha256sum; do
     command -v "$tool" >/dev/null || missing+=("$tool")
 done
 for tool in clang clang++ ld.lld llvm-config llvm-ar llvm-nm llvm-readelf; do

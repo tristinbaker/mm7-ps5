@@ -136,9 +136,24 @@ case $action in
         rm -rf "$staging" && mkdir -p "$staging"
         cp -a "$out/dist/$title_id" "$staging/"
         cp "$MM_PS5_ROOT/scripts/install.py" "$MM_PS5_ROOT/docs/INSTALL.md" "$MM_PS5_ROOT/LICENSE" "$MM_PS5_ROOT/THIRD_PARTY.md" "$staging/"
-        # The console only starts an app whose files are open to everyone, and some unzip tools keep modes.
-        find "$staging/$title_id" -type d -exec chmod 777 {} + && find "$staging/$title_id" -type f -exec chmod 777 {} +
-        (cd "$MM_PS5_BUILD/release" && rm -f "openenroth-ps5-$version.zip" && zip -qr "openenroth-ps5-$version.zip" "openenroth-ps5-$version")
+        # The console only starts an app whose files are open to everyone, and unzip tools that keep modes would
+        # otherwise leave 644 files, so store the title's files as 777.
+        python3 - "$staging" "$MM_PS5_BUILD/release/openenroth-ps5-$version.zip" "$title_id" <<'PY'
+import sys, zipfile
+from pathlib import Path
+staging, target, title_id = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    for path in sorted(staging.rglob("*")):
+        name = f"{staging.name}/{path.relative_to(staging).as_posix()}"
+        mode = 0o777 if path.relative_to(staging).parts[0] == title_id else (0o755 if path.suffix == ".py" else 0o644)
+        info = zipfile.ZipInfo.from_file(path, name)
+        info.external_attr = ((0o040000 if path.is_dir() else 0o100000) | mode) << 16
+        if path.is_dir():
+            archive.writestr(info, "")
+        else:
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, path.read_bytes())
+PY
         echo "Release: $MM_PS5_BUILD/release/openenroth-ps5-$version.zip" ;;
     "") ;;
     *) echo "unknown action: $action" >&2; exit 2 ;;
