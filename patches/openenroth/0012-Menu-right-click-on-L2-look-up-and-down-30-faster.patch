@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 15:38:12 -0400
+Subject: [PATCH] Menu right-click on L2, look up and down 30% faster
+
+Right-click in menus (item info) moves from Square to L2, as asked: the trigger only acts when it crosses the
+threshold, and a click's whole press is kept from the game. Square goes back to the menus' own hotkeys.
+
+Smooth vertical look moves at 65% of the turn speed instead of half, which was too slow on a stick.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Application/GameConfig.h          |  2 +-
+ src/Application/GameWindowHandler.cpp | 19 +++++++++++++++++--
+ src/Application/GameWindowHandler.h   |  1 +
+ src/Engine/Graphics/Indoor.cpp        |  2 +-
+ src/Engine/Graphics/Outdoor.cpp       |  2 +-
+ 5 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/src/Application/GameConfig.h b/src/Application/GameConfig.h
+index e0e863e..a6e0f17 100644
+--- a/src/Application/GameConfig.h
++++ b/src/Application/GameConfig.h
+@@ -636,7 +636,7 @@ class GameConfig : public Config {
+                          "Only smooth is usable on modern machines."};
+ 
+         Int VerticalTurnSpeed = {this, "vertical_turn_speed", 25, &ValidateVerticalTurnSpeed,
+-                                 "Discrete vertical turn speed, use 0 for smooth (looking up and down at half the turn "
++                                 "Discrete vertical turn speed, use 0 for smooth (looking up and down at 65% of the turn "
+                                  "speed for as long as the key is held)."};
+ 
+         // TODO(captainurist): move to [audio]?
+diff --git a/src/Application/GameWindowHandler.cpp b/src/Application/GameWindowHandler.cpp
+index 7d16469..1257755 100644
+--- a/src/Application/GameWindowHandler.cpp
++++ b/src/Application/GameWindowHandler.cpp
+@@ -591,9 +591,9 @@ bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *ev
+ 
+ #ifdef OE_GAMEPAD_MENU_NAVIGATION
+ // In menus, the dialog d-pad bindings move the mouse cursor between the things to click (see Io/MenuNavigation.h),
+-// the dialog select binding clicks and this button right-clicks, for item info and the like. The clicks only happen
++// the dialog select binding clicks and this trigger right-clicks, for item info and the like. The clicks only happen
+ // over something to click, elsewhere the buttons keep doing what they do, like the menus' own hotkeys.
+-static constexpr PlatformKey MENU_RIGHT_CLICK_KEY = PlatformKey::KEY_GAMEPAD_X;
++static constexpr PlatformKey MENU_RIGHT_CLICK_KEY = PlatformKey::KEY_GAMEPAD_L2;
+ static constexpr int64_t MENU_DOUBLE_CLICK_MS = 500;
+ 
+ static Pointi menuNavigationDirection(PlatformKey key) {
+@@ -681,6 +681,21 @@ bool GameWindowHandler::gamepadAxisEvent(const PlatformGamepadAxisEvent *event)
+         value = -value;
+     }
+ 
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    // The menu right-click is a trigger: only act when it crosses the threshold, and keep a click's whole press from
++    // the game.
++    if (key == MENU_RIGHT_CLICK_KEY) {
++        bool down = value >= 0.5;
++        if (down != _menuTriggerDown) {
++            _menuTriggerDown = down;
++            if (down ? menuNavigationKeyPress(key) : menuNavigationKeyRelease(key))
++                return true;
++        } else if (key == _menuClickKey) {
++            return true;
++        }
++    }
++#endif
++
+     // TODO: deadzone should be configurable and default should be lowered once we implement proper axis event processing.
+     if (value >= 0.5) {
+         handleKeyPress(key, 0, false);
+diff --git a/src/Application/GameWindowHandler.h b/src/Application/GameWindowHandler.h
+index b624f64..958a65b 100644
+--- a/src/Application/GameWindowHandler.h
++++ b/src/Application/GameWindowHandler.h
+@@ -76,6 +76,7 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+ #ifdef OE_GAMEPAD_MENU_NAVIGATION
+     PlatformKey _menuClickKey = PlatformKey::KEY_NONE; // Gamepad button holding a menu click down.
+     PlatformMouseButton _menuClickButton = BUTTON_NONE;
++    bool _menuTriggerDown = false; // Whether MENU_RIGHT_CLICK_KEY's trigger is past the threshold.
+     int64_t _menuLastClickTime = 0;
+     Pointi _menuLastClickPosition;
+     int _menuClicks = 0;
+diff --git a/src/Engine/Graphics/Indoor.cpp b/src/Engine/Graphics/Indoor.cpp
+index 4bb2344..041ac5c 100644
+--- a/src/Engine/Graphics/Indoor.cpp
++++ b/src/Engine/Graphics/Indoor.cpp
+@@ -1379,7 +1379,7 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
+         gameTimer->dt().ticks() * pParty->_yawRotationSpeed * TrigLUT.uIntegerPi / 180 / Duration::TICKS_PER_REALTIME_SECOND;
+     int verticalRotation = engine->config->settings.VerticalTurnSpeed.value();
+     if (verticalRotation == 0)
+-        verticalRotation = rotation / 2; // Smooth, the look actions then trigger every frame.
++        verticalRotation = std::lround(rotation * 0.65f); // Smooth, the look actions then trigger every frame.
+ 
+     pParty->velocity = Vec3f(0, 0, pParty->velocity.z);
+ 
+diff --git a/src/Engine/Graphics/Outdoor.cpp b/src/Engine/Graphics/Outdoor.cpp
+index bcaf78c..3dc4505 100644
+--- a/src/Engine/Graphics/Outdoor.cpp
++++ b/src/Engine/Graphics/Outdoor.cpp
+@@ -992,7 +992,7 @@ void ODM_ProcessPartyActions() {
+     int64_t dturn = gameTimer->dt().ticks() * pParty->_yawRotationSpeed * TrigLUT.uIntegerPi / 180 / Duration::TICKS_PER_REALTIME_SECOND;
+     int dpitch = engine->config->settings.VerticalTurnSpeed.value();
+     if (dpitch == 0)
+-        dpitch = dturn / 2; // Smooth, the look actions then trigger every frame.
++        dpitch = std::lround(dturn * 0.65f); // Smooth, the look actions then trigger every frame.
+     while (pPartyActionQueue->uNumActions) {
+         switch (pPartyActionQueue->Next()) {
+             case PARTY_FlyUp:

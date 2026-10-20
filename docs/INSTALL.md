@@ -43,11 +43,11 @@ Controller support is still in progress.
 | Right stick | Turn, look up and down | |
 | Cross | Interact: talk, open, pick up | Click what the cursor is on |
 | Circle | Game menu: save, load, quit | Back: close the current screen, No |
-| Square | Attack | Right-click what the cursor is on: hold for item and spell info |
+| Square | Attack | Load Game (game menu) |
 | Triangle | Jump; fly up while flying | Save Game, Credits |
 | L1 | Spellbook | |
 | R1 | Cast the quick spell | Spellbook: make the selected spell the quick spell; Options (main menu); Rest 8 hours (rest menu) |
-| L2 | Fly down | |
+| L2 | Fly down | Right-click what the cursor is on: hold for item and spell info |
 | R2 | Turn-based mode on/off | |
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
@@ -65,8 +65,9 @@ keeps it for itself.
 
 **In menus** (the inventory, the spellbook, shops, the game menu and so on) the D-pad moves the cursor to the nearest
 button, inventory cell, equipped item or shop item in that direction, and Cross clicks it. Hold a direction to keep
-moving. When the cursor isn't on anything,
-Cross and Square do their menu shortcuts instead (for example Cross starts a new game in the game menu).
+moving. Hold L2 on an item to see its
+details. When the cursor isn't on anything, Cross does the menu's shortcut instead (for example it starts a new game
+in the game menu).
 
 Character creation, conversations and the menus inside buildings keep their own D-pad controls: the D-pad moves the
 highlight and Cross picks it. In character creation, L1 and R1 lower and raise the highlighted stat, Triangle
