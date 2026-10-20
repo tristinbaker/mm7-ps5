@@ -58,7 +58,7 @@ static const struct { const char *section, *key, *value; } gamepadSettings[] = {
 // The Create button never reaches games (the system keeps it), so nothing uses BACK.
 // Bump GAMEPAD_LAYOUT_VERSION when changing this or gamepadSettings: existing configs then get the new layout and
 // settings once.
-#define GAMEPAD_LAYOUT_VERSION "2"
+#define GAMEPAD_LAYOUT_VERSION "3"
 static const char gamepadLayout[] =
     "[gamepad]\n"
     "forward = LSTICK UP\n"
@@ -71,7 +71,7 @@ static const char gamepadLayout[] =
     "look_down = RSTICK DOWN\n"
     "always_run = L3\n"
     "event_trigger = A (CROSS)\n"
-    "escape = START\n"
+    "escape = B (CIRCLE)\n"
     "attack = X (SQUARE)\n"
     "jump = Y (TRIANGLE)\n"
     "fly_up = Y (TRIANGLE)\n"
@@ -81,7 +81,7 @@ static const char gamepadLayout[] =
     "cast_ready = R1\n"
     "combat = R2\n"
     "pass = R3\n"
-    "inventory = B (CIRCLE)\n"
+    "inventory = START\n"
     "rest = \n"
     "char_cycle = DPAD DOWN\n"
     "auto_notes = DPAD UP\n"

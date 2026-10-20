@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:46:01 -0400
+Subject: [PATCH] Set the quick spell with the quick cast key in the spellbook
+
+The spellbook's quick spell button had no key, so a gamepad couldn't reach it. The quick cast key does nothing in
+the spellbook otherwise, and pressing it there now makes the selected spell the one it casts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/GUI/UI/UISpellbook.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/GUI/UI/UISpellbook.cpp b/src/GUI/UI/UISpellbook.cpp
+index 50b0173..e37030f 100644
+--- a/src/GUI/UI/UISpellbook.cpp
++++ b/src/GUI/UI/UISpellbook.cpp
+@@ -144,8 +144,9 @@ void GUIWindow_Spellbook::openSpellbook() {
+                          {50, 36}, BUTTON_TYPE_NORMAL, 0, UIMSG_OpenSpellbookPage, std::to_underlying(school), INPUT_ACTION_INVALID,
+                          localization->spellSchoolName(school));
+ 
++    // The quick cast key sets the quick spell here, so that it's reachable without a mouse.
+     pBtn_InstallRemoveSpell = CreateButton({476, 450}, ui_spellbook_btn_quckspell->size(), BUTTON_TYPE_NORMAL, UIMSG_HintSelectRemoveQuickSpellBtn,
+-                                           UIMSG_ClickInstallRemoveQuickSpellBtn, 0, INPUT_ACTION_INVALID, "", {ui_spellbook_btn_quckspell_click});
++                                           UIMSG_ClickInstallRemoveQuickSpellBtn, 0, INPUT_ACTION_QUICK_CAST, "", {ui_spellbook_btn_quckspell_click});
+     pBtn_CloseBook = CreateButton({561, 450}, ui_spellbook_btn_close->size(), BUTTON_TYPE_NORMAL, 0, UIMSG_Escape, 0, INPUT_ACTION_INVALID,
+                                   localization->str(LSTR_EXIT_DIALOGUE), {ui_spellbook_btn_close_click});
+ }

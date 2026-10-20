@@ -42,16 +42,16 @@ Controller support is still in progress.
 | Left stick | Walk, strafe | |
 | Right stick | Turn, look up and down | |
 | Cross | Interact: talk, open, pick up | Select, New Game |
-| Circle | Inventory | No, Exit (main menu) |
+| Circle | Game menu: save, load, quit | Back: close the current screen, No |
 | Square | Attack | Load Game |
 | Triangle | Jump; fly up while flying | Save Game, Credits |
 | L1 | Spellbook | |
-| R1 | Quick spell | Options (main menu), Rest 8 hours (rest menu) |
+| R1 | Cast the quick spell | Spellbook: make the selected spell the quick spell; Options (main menu); Rest 8 hours (rest menu) |
 | L2 | Fly down | |
 | R2 | Turn-based mode on/off | |
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
-| Options | Game menu: save, load, quit | Close the current screen |
+| Options | Inventory | |
 | D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move between choices |
 | Touchpad | Mouse cursor, see below | Mouse cursor |
 
@@ -63,7 +63,11 @@ mouse.
 To **rest**, click the campfire button at the bottom of the screen. The Create button can't be used: the console
 keeps it for itself.
 
-To **save**, open the game menu (Options), choose Save, click an empty slot, then click Save. The name starts as your
+To **set the quick spell**, open the spellbook (L1), pick a spell with the touchpad (or step through the page with D-pad
+up; D-pad down turns to the next school), and press R1. R1
+then casts it in the game. Pressing Cross on the selected spell casts it straight away.
+
+To **save**, open the game menu (Circle), choose Save, click an empty slot, then click Save. The name starts as your
 location; click Save again to keep it.
 
 Known problems: the sticks work like keys (walk or don't, move at one speed) rather than analog.
