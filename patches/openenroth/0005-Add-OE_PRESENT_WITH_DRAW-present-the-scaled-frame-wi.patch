@@ -1,4 +1,4 @@
-From 12f3a71422c31fcb7c342cbdc483da2d97d1ce8c Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tristin Baker <tristinbaker@protonmail.com>
 Date: Tue, 20 Oct 2026 13:52:43 -0400
 Subject: [PATCH] Add OE_PRESENT_WITH_DRAW: present the scaled frame with a

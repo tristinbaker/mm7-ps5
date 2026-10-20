@@ -9,5 +9,5 @@ base=$(sed -n 's/^OPENENROTH_COMMIT=//p' "$MM_PS5_ROOT/scripts/setup.sh")
 
 [[ -z $(git -C "$oe" status --porcelain --untracked-files=no) ]] || { echo "deps/openenroth has uncommitted changes" >&2; exit 1; }
 rm -f "$MM_PS5_ROOT"/patches/openenroth/*.patch
-git -C "$oe" format-patch -q --no-signature --no-numbered -o "$MM_PS5_ROOT/patches/openenroth" "$base..ps5"
+git -C "$oe" format-patch -q --no-signature --no-numbered --zero-commit -o "$MM_PS5_ROOT/patches/openenroth" "$base..ps5"
 ls "$MM_PS5_ROOT/patches/openenroth"

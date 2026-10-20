@@ -1,4 +1,4 @@
-From 56e757e84528ef362244aabcd756dc3f8fbe0b15 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tristin Baker <tristinbaker@protonmail.com>
 Date: Tue, 20 Oct 2026 12:56:51 -0400
 Subject: [PATCH] Add OE_GL33 option to run the OpenGL renderer on a 3.3 core

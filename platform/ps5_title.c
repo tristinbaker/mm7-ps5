@@ -48,10 +48,17 @@ static const char defaultConfig[] =
     "no_intro = true\n"
     "no_logo = true\n";
 
+// Settings a gamepad needs, applied to existing configs together with the layout below.
+static const struct { const char *section, *key, *value; } gamepadSettings[] = {
+    {"settings", "vertical_turn_speed", "0"}, // Smooth looking up and down, instead of steps.
+};
+
 // The DualSense layout, written as the [gamepad] section of openenroth.ini (see docs/INSTALL.md for the table).
 // Every action is listed, so none of OpenEnroth's desktop defaults, some of which share a button, are left over.
-// Bump GAMEPAD_LAYOUT_VERSION when changing it: the new layout then replaces the bindings in existing configs once.
-#define GAMEPAD_LAYOUT_VERSION "1"
+// The Create button never reaches games (the system keeps it), so nothing uses BACK.
+// Bump GAMEPAD_LAYOUT_VERSION when changing this or gamepadSettings: existing configs then get the new layout and
+// settings once.
+#define GAMEPAD_LAYOUT_VERSION "2"
 static const char gamepadLayout[] =
     "[gamepad]\n"
     "forward = LSTICK UP\n"
@@ -64,7 +71,7 @@ static const char gamepadLayout[] =
     "look_down = RSTICK DOWN\n"
     "always_run = L3\n"
     "event_trigger = A (CROSS)\n"
-    "escape = B (CIRCLE)\n"
+    "escape = START\n"
     "attack = X (SQUARE)\n"
     "jump = Y (TRIANGLE)\n"
     "fly_up = Y (TRIANGLE)\n"
@@ -74,8 +81,8 @@ static const char gamepadLayout[] =
     "cast_ready = R1\n"
     "combat = R2\n"
     "pass = R3\n"
-    "inventory = START\n"
-    "rest = BACK\n"
+    "inventory = B (CIRCLE)\n"
+    "rest = \n"
     "char_cycle = DPAD DOWN\n"
     "auto_notes = DPAD UP\n"
     "map_book = DPAD LEFT\n"
@@ -121,7 +128,7 @@ static const char gamepadLayout[] =
     "stats = A (CROSS)\n"
     "skills = X (SQUARE)\n"
     "awards = L1\n"
-    "rest_8_hours = BACK\n"
+    "rest_8_hours = R1\n"
     "wait_till_dawn = Y (TRIANGLE)\n"
     "wait_hour = X (SQUARE)\n"
     "wait_5_minutes = A (CROSS)\n";
@@ -157,8 +164,60 @@ static int writeFile(const char *path, const char *first, size_t firstLength, co
     return ok ? rename(temporary, path) : -1;
 }
 
+// Returns the start of the line in `text` that begins with `prefix`, or NULL.
+static char *findLine(char *text, const char *prefix) {
+    size_t length = strlen(prefix);
+    for (char *line = text; line && *line; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : NULL)
+        if (strncmp(line, prefix, length) == 0)
+            return line;
+    return NULL;
+}
+
+// Returns `config` with [section]'s `key = value` set: the key's line replaced, or added at the start of the section,
+// or a new section added at the end. Frees `config`.
+static char *setConfigValue(char *config, const char *section, const char *key, const char *value) {
+    char header[64], entry[128];
+    snprintf(header, sizeof(header), "[%s]", section);
+    snprintf(entry, sizeof(entry), "%s = %s\n", key, value);
+
+    size_t length = strlen(config);
+    char *from = config + length, *to = from; // The part of config that `entry` replaces.
+    const char *before = "";
+    char *sectionStart = findLine(config, header);
+    if (!sectionStart) {
+        before = length > 0 && config[length - 1] != '\n' ? "\n\n" : "\n";
+        snprintf(header + strlen(header), sizeof(header) - strlen(header), "\n");
+    } else {
+        char *sectionEnd = strstr(sectionStart, "\n[");
+        sectionEnd = sectionEnd ? sectionEnd + 1 : config + length;
+        char *body = strchr(sectionStart, '\n');
+        from = to = body ? body + 1 : config + length;
+        before = body ? "" : "\n";
+        header[0] = '\0';
+        for (char *line = from; line < sectionEnd; line = strchr(line, '\n') ? strchr(line, '\n') + 1 : sectionEnd) {
+            size_t keyLength = strlen(key);
+            const char *rest = line + strspn(line, " \t");
+            if (strncmp(rest, key, keyLength) == 0 && strchr(" \t=", rest[keyLength]) &&
+                rest[keyLength + strspn(rest + keyLength, " \t")] == '=') {
+                char *lineEnd = strchr(line, '\n');
+                from = line;
+                to = lineEnd ? lineEnd + 1 : config + length;
+                break;
+            }
+        }
+    }
+
+    size_t resultLength = (size_t)(from - config) + strlen(before) + strlen(header) + strlen(entry) + strlen(to);
+    char *result = malloc(resultLength + 1);
+    if (!result)
+        return config;
+    snprintf(result, resultLength + 1, "%.*s%s%s%s%s", (int)(from - config), config, before, header, entry, to);
+    free(config);
+    return result;
+}
+
 // First launch: write the console defaults. Later launches: if the layout version changed, replace the config's
-// [gamepad] section with the current layout and keep everything else.
+// [gamepad] section with the current layout, apply gamepadSettings and keep everything else.
 static void prepareConfig(void) {
     mkdir(configDirectory, 0777);
     char *version = readFile(layoutVersionPath);
@@ -167,9 +226,15 @@ static void prepareConfig(void) {
 
     char *config = readFile(configPath);
     int result = 0;
-    if (!config) {
-        result = writeFile(configPath, defaultConfig, strlen(defaultConfig), gamepadLayout);
-    } else if (!layoutCurrent) {
+    if (!config || !layoutCurrent) {
+        if (!config)
+            config = strdup(defaultConfig);
+        for (size_t i = 0; config && i < sizeof(gamepadSettings) / sizeof(gamepadSettings[0]); i++)
+            config = setConfigValue(config, gamepadSettings[i].section, gamepadSettings[i].key, gamepadSettings[i].value);
+        if (!config) {
+            fprintf(stderr, "[mm-ps5] out of memory preparing %s\n", configPath);
+            return;
+        }
         // Drop the old [gamepad] section: from its header to the next section header.
         char *start = strstr(config, "[gamepad]");
         while (start && start != config && start[-1] != '\n')

@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:33:08 -0400
+Subject: [PATCH] Start a new save's name with the current location
+
+Saving into a new slot asks for a name and won't save without one, which needs a keyboard. Start the name with
+the location's name instead, so pressing Save again saves; the name can still be edited first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Application/GameMenu.cpp |  2 +-
+ src/GUI/UI/UISaveLoad.cpp    | 21 +++++++++++++++------
+ src/GUI/UI/UISaveLoad.h      |  6 ++++++
+ 3 files changed, 22 insertions(+), 7 deletions(-)
+
+diff --git a/src/Application/GameMenu.cpp b/src/Application/GameMenu.cpp
+index 13c8254..1d28320 100644
+--- a/src/Application/GameMenu.cpp
++++ b/src/Application/GameMenu.cpp
+@@ -141,7 +141,7 @@ void Menu::EventLoop() {
+                     keyboardInputHandler->EndTextInput();
+                 } else if (menu->selectedSlot().fileName.empty() && menu->selectedSlot().header.name.empty()) {
+                     // Don't just save into the new save slot, ask for the save name first.
+-                    keyboardInputHandler->StartTextInput(TEXT_INPUT_TEXT, 19, pGUIWindow_CurrentMenu.get());
++                    menu->startSlotNameInput();
+                     continue;
+                 }
+                 doSavegame(menu->selectedSlot().fileName, menu->selectedSlot().header.name);
+diff --git a/src/GUI/UI/UISaveLoad.cpp b/src/GUI/UI/UISaveLoad.cpp
+index 3b30b60..1549f2e 100644
+--- a/src/GUI/UI/UISaveLoad.cpp
++++ b/src/GUI/UI/UISaveLoad.cpp
+@@ -31,6 +31,8 @@
+ #include "Utility/String/Ascii.h"
+ #include "Utility/Exception.h"
+ 
++static constexpr int MAX_SLOT_NAME_LENGTH = 19;
++
+ std::array<int, 2> saveload_dlg_xs = {{82, 0}};
+ std::array<int, 2> saveload_dlg_ys = {{60, 0}};
+ std::array<int, 2> saveload_dlg_zs = {{460, 640}};
+@@ -186,7 +188,7 @@ void GUIWindow_SaveLoad::drawSaveLoad() {
+         keyboard_input_status = WINDOW_INPUT_NONE;
+         if (keyboardInputHandler->GetTextInput().empty()) {
+             // Saves need a name, keep the input open.
+-            keyboardInputHandler->StartTextInput(TEXT_INPUT_TEXT, 19, this);
++            keyboardInputHandler->StartTextInput(TEXT_INPUT_TEXT, MAX_SLOT_NAME_LENGTH, this);
+         } else {
+             setSelectedSlotName(keyboardInputHandler->GetTextInput());
+             engine->_messageQueue->addMessageCurrentFrame(UIMSG_SaveGame, 0, 0);
+@@ -275,6 +277,16 @@ void GUIWindow_Save::Update() {
+     drawSaveLoad();
+ }
+ 
++void GUIWindow_SaveLoad::startSlotNameInput() {
++    keyboardInputHandler->StartTextInput(TEXT_INPUT_TEXT, MAX_SLOT_NAME_LENGTH, this);
++    if (!selectedSlot().fileName.empty()) {
++        keyboardInputHandler->SetTextInput(selectedSlot().header.name);
++    } else if (engine->_currentLoadedMapId != MAP_INVALID) {
++        std::string location = pMapTable->pInfos[engine->_currentLoadedMapId].name;
++        keyboardInputHandler->SetTextInput(location.substr(0, MAX_SLOT_NAME_LENGTH));
++    }
++}
++
+ void GUIWindow_Save::slotClicked(int slotIndex, bool isDoubleClick) {
+     if (keyboard_input_status == WINDOW_INPUT_IN_PROGRESS)
+         keyboardInputHandler->EndTextInput();
+@@ -282,11 +294,8 @@ void GUIWindow_Save::slotClicked(int slotIndex, bool isDoubleClick) {
+     if (slot >= std::ssize(_slots))
+         return; // Clicked below the last slot.
+     _selectedSlot = slot;
+-    if (isDoubleClick) {
+-        keyboardInputHandler->StartTextInput(TEXT_INPUT_TEXT, 19, this);
+-        if (!selectedSlot().fileName.empty())
+-            keyboardInputHandler->SetTextInput(selectedSlot().header.name);
+-    }
++    if (isDoubleClick)
++        startSlotNameInput();
+ }
+ 
+ GUIWindow_Load::GUIWindow_Load(bool ingame) : GUIWindow_SaveLoad(WINDOW_LOAD, {0, 0}, {0, 0}) {
+diff --git a/src/GUI/UI/UISaveLoad.h b/src/GUI/UI/UISaveLoad.h
+index a6e12f9..d715101 100644
+--- a/src/GUI/UI/UISaveLoad.h
++++ b/src/GUI/UI/UISaveLoad.h
+@@ -46,6 +46,12 @@ class GUIWindow_SaveLoad : public GUIWindow {
+         _slots[_selectedSlot].header.name = name;
+     }
+ 
++    /**
++     * Starts editing the selected slot's name. A new slot starts with the current location's name, so that pressing
++     * Save again saves without typing - all a gamepad can do.
++     */
++    void startSlotNameInput();
++
+     /**
+      * Handles a click on one of the visible slot rows. A single click selects the slot, and a double click on
+      * the selected slot acts on it - loading it in the load menu, renaming it in the save menu.

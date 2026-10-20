@@ -42,17 +42,16 @@ Controller support is still in progress.
 | Left stick | Walk, strafe | |
 | Right stick | Turn, look up and down | |
 | Cross | Interact: talk, open, pick up | Select, New Game |
-| Circle | Back / game menu | Back, Exit |
+| Circle | Inventory | No, Exit (main menu) |
 | Square | Attack | Load Game |
 | Triangle | Jump; fly up while flying | Save Game, Credits |
 | L1 | Spellbook | |
-| R1 | Quick spell | Options |
+| R1 | Quick spell | Options (main menu), Rest 8 hours (rest menu) |
 | L2 | Fly down | |
 | R2 | Turn-based mode on/off | |
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
-| Options | Inventory | |
-| Create | Rest | Rest 8 hours (in the rest menu) |
+| Options | Game menu: save, load, quit | Close the current screen |
 | D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move between choices |
 | Touchpad | Mouse cursor, see below | Mouse cursor |
 
@@ -61,7 +60,13 @@ press it with two fingers on it to right-click (hold for the info pop-ups). The 
 pad and hides again after a few seconds. Use it for the inventory, spellbook, shops and anything else that needs a
 mouse.
 
-Known problems: the sticks work like keys (walk or don't, turn at one speed) rather than analog.
+To **rest**, click the campfire button at the bottom of the screen. The Create button can't be used: the console
+keeps it for itself.
+
+To **save**, open the game menu (Options), choose Save, click an empty slot, then click Save. The name starts as your
+location; click Save again to keep it.
+
+Known problems: the sticks work like keys (walk or don't, move at one speed) rather than analog.
 
 The layout is written to the game's configuration when the title starts. You can change bindings in the game's
 controls menu; a release that changes the layout replaces the gamepad bindings once.

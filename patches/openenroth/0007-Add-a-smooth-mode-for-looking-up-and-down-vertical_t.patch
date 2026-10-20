@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:33:08 -0400
+Subject: [PATCH] Add a smooth mode for looking up and down:
+ vertical_turn_speed = 0
+
+Looking up and down moves the view in steps of vertical_turn_speed, repeated with the keyboard's repeat delay.
+That's how the original game works, but with a gamepad stick it's jerky. With 0, like turn_speed's smooth mode,
+the look actions trigger every frame while held and move the view at half the turn speed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Application/GameConfig.h    | 6 ++++--
+ src/Engine/Graphics/Indoor.cpp  | 7 +++++--
+ src/Engine/Graphics/Outdoor.cpp | 7 +++++--
+ src/Io/KeyboardInputHandler.cpp | 6 +++++-
+ 4 files changed, 19 insertions(+), 7 deletions(-)
+
+diff --git a/src/Application/GameConfig.h b/src/Application/GameConfig.h
+index a487ab1..e0e863e 100644
+--- a/src/Application/GameConfig.h
++++ b/src/Application/GameConfig.h
+@@ -635,7 +635,9 @@ class GameConfig : public Config {
+                          "Discrete turn speed, use 0 for smooth, 16 for 64 degrees turn, 32 for 128 degrees turn, etc. "
+                          "Only smooth is usable on modern machines."};
+ 
+-        Int VerticalTurnSpeed = {this, "vertical_turn_speed", 25, &ValidateVerticalTurnSpeed, "Discrete vertical turn speed."};
++        Int VerticalTurnSpeed = {this, "vertical_turn_speed", 25, &ValidateVerticalTurnSpeed,
++                                 "Discrete vertical turn speed, use 0 for smooth (looking up and down at half the turn "
++                                 "speed for as long as the key is held)."};
+ 
+         // TODO(captainurist): move to [audio]?
+         Bool WalkSound = {this, "walk_sound", true, "Enable footsteps sound when walking."};
+@@ -657,7 +659,7 @@ class GameConfig : public Config {
+             return std::clamp(level, 0, 9);
+         }
+         static int ValidateVerticalTurnSpeed(int speed) {
+-            return std::clamp(speed, 1, 128);
++            return std::clamp(speed, 0, 128);
+         }
+         static int ValidateTurnSpeed(int speed) {
+             return std::clamp(speed, 0, 1024);
+diff --git a/src/Engine/Graphics/Indoor.cpp b/src/Engine/Graphics/Indoor.cpp
+index d50af90..4bb2344 100644
+--- a/src/Engine/Graphics/Indoor.cpp
++++ b/src/Engine/Graphics/Indoor.cpp
+@@ -1377,6 +1377,9 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
+     // TODO(captainurist): #time think about a better way to write this formula.
+     int rotation =
+         gameTimer->dt().ticks() * pParty->_yawRotationSpeed * TrigLUT.uIntegerPi / 180 / Duration::TICKS_PER_REALTIME_SECOND;
++    int verticalRotation = engine->config->settings.VerticalTurnSpeed.value();
++    if (verticalRotation == 0)
++        verticalRotation = rotation / 2; // Smooth, the look actions then trigger every frame.
+ 
+     pParty->velocity = Vec3f(0, 0, pParty->velocity.z);
+ 
+@@ -1446,7 +1449,7 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
+                 break;
+ 
+             case PARTY_LookUp:
+-                pParty->_viewPitch += engine->config->settings.VerticalTurnSpeed.value();
++                pParty->_viewPitch += verticalRotation;
+                 if (pParty->_viewPitch > 128)
+                     pParty->_viewPitch = 128;
+                 if (pParty->hasActiveCharacter())
+@@ -1454,7 +1457,7 @@ void BLV_ProcessPartyActions() {  // could this be combined with odm process act
+                 break;
+ 
+             case PARTY_LookDown:
+-                pParty->_viewPitch -= engine->config->settings.VerticalTurnSpeed.value();
++                pParty->_viewPitch -= verticalRotation;
+                 if (pParty->_viewPitch < -128)
+                     pParty->_viewPitch = -128;
+                 if (pParty->hasActiveCharacter())
+diff --git a/src/Engine/Graphics/Outdoor.cpp b/src/Engine/Graphics/Outdoor.cpp
+index de4cccb..bcaf78c 100644
+--- a/src/Engine/Graphics/Outdoor.cpp
++++ b/src/Engine/Graphics/Outdoor.cpp
+@@ -990,6 +990,9 @@ void ODM_ProcessPartyActions() {
+ 
+     // TODO(captainurist): #time think about a better way to write this formula.
+     int64_t dturn = gameTimer->dt().ticks() * pParty->_yawRotationSpeed * TrigLUT.uIntegerPi / 180 / Duration::TICKS_PER_REALTIME_SECOND;
++    int dpitch = engine->config->settings.VerticalTurnSpeed.value();
++    if (dpitch == 0)
++        dpitch = dturn / 2; // Smooth, the look actions then trigger every frame.
+     while (pPartyActionQueue->uNumActions) {
+         switch (pPartyActionQueue->Next()) {
+             case PARTY_FlyUp:
+@@ -1167,7 +1170,7 @@ void ODM_ProcessPartyActions() {
+                 break;
+ 
+             case PARTY_LookUp:
+-                pParty->_viewPitch += engine->config->settings.VerticalTurnSpeed.value();
++                pParty->_viewPitch += dpitch;
+                 if (pParty->_viewPitch > 128) pParty->_viewPitch = 128;
+                 if (pParty->hasActiveCharacter()) {
+                     pParty->activeCharacter().playReaction(SPEECH_LOOK_UP);
+@@ -1175,7 +1178,7 @@ void ODM_ProcessPartyActions() {
+                 break;
+ 
+             case PARTY_LookDown:
+-                pParty->_viewPitch -= engine->config->settings.VerticalTurnSpeed.value();
++                pParty->_viewPitch -= dpitch;
+                 if (pParty->_viewPitch < -128) pParty->_viewPitch = -128;
+                 if (pParty->hasActiveCharacter()) {
+                     pParty->activeCharacter().playReaction(SPEECH_LOOK_DOWN);
+diff --git a/src/Io/KeyboardInputHandler.cpp b/src/Io/KeyboardInputHandler.cpp
+index d81eff8..a6ffbc7 100644
+--- a/src/Io/KeyboardInputHandler.cpp
++++ b/src/Io/KeyboardInputHandler.cpp
+@@ -63,8 +63,12 @@ void Io::KeyboardInputHandler::GenerateActions(bool isPaused) {
+     bool resettimer = true;
+     for (InputAction action : allInputActions()) {
+         bool isTriggered = false;
++        InputActionTriggerMode triggerMode = triggerModeForInputAction(action);
++        if ((action == INPUT_ACTION_LOOK_UP || action == INPUT_ACTION_LOOK_DOWN) &&
++            engine->config->settings.VerticalTurnSpeed.value() == 0)
++            triggerMode = TRIGGER_CONTINUOUSLY; // Smooth vertical look, see VerticalTurnSpeed.
+         for (PlatformKey key : {actionMapping->keyFor(action), actionMapping->gamepadKeyFor(action)}) {
+-            switch (triggerModeForInputAction(action)) {
++            switch (triggerMode) {
+             default: assert(false); [[fallthrough]];
+             case TRIGGER_ONCE:
+                 isTriggered = controller->isKeyPressedThisFrame(key);
