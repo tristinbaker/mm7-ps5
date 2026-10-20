@@ -397,6 +397,16 @@ int dladdr(const void *address, void *info) {
     return 0; // "Not found", OpenSSL then works without the module path.
 }
 
+// The console's libc import for getcwd resolves to nothing in a native title, and calling it jumped to address 0
+// (std::filesystem::current_path does, the MM6 branch asks for it while detecting the game). A native title has no
+// working directory to report.
+char *getcwd(char *buffer, size_t size) {
+    (void)buffer;
+    (void)size;
+    errno = ENOSYS;
+    return NULL;
+}
+
 int isatty(int descriptor) {
     (void)descriptor;
     errno = ENOTTY;
