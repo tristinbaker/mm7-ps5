@@ -9,7 +9,7 @@
 # Usage: scripts/package.sh                build build/title/dist/PPSA99967
 #        scripts/package.sh deploy         build, then upload the program to $PS5_HOST
 #        scripts/package.sh deploy-data    upload the MM7 files from $MM7_DATA (needed once)
-#        scripts/package.sh release        build, then make build/release/openenroth-ps5-<version>.zip
+#        scripts/package.sh release        build, then make build/release/mm7-ps5-<version>.zip
 set -euo pipefail
 
 . "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
@@ -153,13 +153,13 @@ case $action in
         python3 "$MM_PS5_ROOT/scripts/install.py" --ps5 "$PS5_HOST" --port "$FTP_PORT" --title "$out/dist/$title_id" --program-only ;;
     release)
         version=$(git -C "$MM_PS5_ROOT" describe --tags --always --dirty)
-        staging=$MM_PS5_BUILD/release/openenroth-ps5-$version
+        staging=$MM_PS5_BUILD/release/mm7-ps5-$version
         rm -rf "$staging" && mkdir -p "$staging"
         cp -a "$out/dist/$title_id" "$staging/"
         cp "$MM_PS5_ROOT/scripts/install.py" "$MM_PS5_ROOT/docs/INSTALL.md" "$MM_PS5_ROOT/LICENSE" "$MM_PS5_ROOT/THIRD_PARTY.md" "$staging/"
         # The console only starts an app whose files are open to everyone, and unzip tools that keep modes would
         # otherwise leave 644 files, so store the title's files as 777.
-        python3 - "$staging" "$MM_PS5_BUILD/release/openenroth-ps5-$version.zip" "$title_id" <<'PY'
+        python3 - "$staging" "$MM_PS5_BUILD/release/mm7-ps5-$version.zip" "$title_id" <<'PY'
 import sys, zipfile
 from pathlib import Path
 staging, target, title_id = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
@@ -175,7 +175,7 @@ with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, path.read_bytes())
 PY
-        echo "Release: $MM_PS5_BUILD/release/openenroth-ps5-$version.zip" ;;
+        echo "Release: $MM_PS5_BUILD/release/mm7-ps5-$version.zip" ;;
     "") ;;
     *) echo "unknown action: $action" >&2; exit 2 ;;
 esac
