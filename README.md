@@ -80,6 +80,7 @@ shader compilation, display mode, and every DualSense input, rumble and light ba
 | `platform/` | runtime glue linked into the title |
 | `patches/` | changes to OpenEnroth and ps5-opengl |
 | `tools/smoke-test/` | hardware check title |
+| `title/` | home-screen art, turned into the icon and backgrounds by `scripts/make-title-art.py` |
 | `docs/` | install guide |
 | `deps/`, `build/`, `logs/` | created by the scripts, not committed |
 

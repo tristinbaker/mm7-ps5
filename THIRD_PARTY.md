@@ -6,7 +6,9 @@ Because several of them are GPL-3.0-or-later, the title as a whole is distribute
 `LICENSE`); the source for everything in it is available from the projects below at the listed versions, plus
 this repository.
 
-No Might and Magic game data is included anywhere. You need your own copy of the game.
+No Might and Magic game data is included anywhere. You need your own copy of the game. The one exception is the
+home-screen art, `title/art.png`: the Might and Magic VII cover art, which belongs to Ubisoft and is not covered
+by this repository's license.
 
 | Component | Version | License | Used for |
 | --- | --- | --- | --- |

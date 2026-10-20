@@ -24,8 +24,8 @@ PS5_SDL_COMMIT=8c56053f13ca13a0c050de613706ff69eb615836
 # OpenEnroth, with patches/openenroth applied on a ps5 branch.
 OPENENROTH_URL=${OPENENROTH_URL:-https://github.com/OpenEnroth/OpenEnroth.git}
 OPENENROTH_COMMIT=e355c999ca1351a8ee58ad094a70ffa2312bc16b
-# Python tools for building Mesa.
-PYTHON_PACKAGES="meson==1.12.1 mako==1.4.3 markupsafe==3.0.4 pyyaml==6.0.3 packaging==26.3"
+# Python tools for building Mesa, and for the title art (scripts/make-title-art.py).
+PYTHON_PACKAGES="meson==1.12.1 mako==1.4.3 markupsafe==3.0.4 pyyaml==6.0.3 packaging==26.3 pillow==12.3.0 etcpak==0.9.15"
 # ----------------------------------------------------------------------------------------------------------
 
 stamps=$MM_PS5_DEPS/.stamps

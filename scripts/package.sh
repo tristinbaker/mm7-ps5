@@ -44,6 +44,9 @@ cp "$gl/native-app/app_heap.c" "$MM_PS5_ROOT/platform/"*.c "$out/src/"
 cp "$out/tooling/native/ps5-pie.ld" "$out/tooling/native/ps5-pie-base.ld"
 cp "$gl/native-app/ps5-pie.ld" "$gl/native-app/app-symbols.map" "$out/tooling/native/"
 cp "$gl_sdk/lib/libSceAgc.so" "$gl_sdk/lib/libSceAgcDriver.so" "$sdk/target/lib/"
+# Home-screen art from title/art.png, replacing the template's placeholders (and its sample selection sound).
+"$MM_PS5_DEPS/venv/bin/python" "$MM_PS5_ROOT/scripts/make-title-art.py" "$MM_PS5_ROOT/title/art.png" "$out/sce_sys"
+rm -f "$out/sce_sys/snd0.at9"
 
 python3 - "$gl/native-app/param.json" "$out/sce_sys/param.json" "$title_id" "$title_name" "$content_id" <<'PY'
 import json, sys
