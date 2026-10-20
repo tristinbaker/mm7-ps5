@@ -1,0 +1,1933 @@
+From b19e8a7d29616a01953b7332e943d1a4ff526e7d Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 12:56:51 -0400
+Subject: [PATCH 2/3] Add an SDL2 platform backend, selected with OE_USE_SDL2
+
+src/Library/Platform/Sdl2 implements the platform interface against SDL 2.30 for platforms that only
+have SDL2, such as the PS5 homebrew SDK. It is a port of the SDL3 backend, which stays the default and is
+unchanged. ImGui uses its SDL2 backend in that configuration. Adaptive vsync falls back to normal vsync
+when the driver rejects it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |   5 +
+ CMakeModules/Dependencies.cmake               |  32 +-
+ .../Graphics/Renderer/OpenGLRenderer.cpp      |  16 +
+ src/GUI/Overlay/OverlayEventHandler.cpp       |   8 +
+ src/Library/Platform/CMakeLists.txt           |   9 +-
+ src/Library/Platform/Sdl2/CMakeLists.txt      |  44 +++
+ .../Platform/Sdl2/SdlEnumTranslation.cpp      | 245 ++++++++++++
+ .../Platform/Sdl2/SdlEnumTranslation.h        |  19 +
+ src/Library/Platform/Sdl2/SdlEventLoop.cpp    | 366 ++++++++++++++++++
+ src/Library/Platform/Sdl2/SdlEventLoop.h      |  43 ++
+ src/Library/Platform/Sdl2/SdlGamepad.cpp      |  30 ++
+ src/Library/Platform/Sdl2/SdlGamepad.h        |  27 ++
+ src/Library/Platform/Sdl2/SdlLogSource.cpp    |  26 ++
+ src/Library/Platform/Sdl2/SdlLogSource.h      |   9 +
+ src/Library/Platform/Sdl2/SdlMain.cpp         |  11 +
+ .../Platform/Sdl2/SdlOpenGLContext.cpp        |  47 +++
+ src/Library/Platform/Sdl2/SdlOpenGLContext.h  |  24 ++
+ src/Library/Platform/Sdl2/SdlPlatform.cpp     | 165 ++++++++
+ src/Library/Platform/Sdl2/SdlPlatform.h       |  35 ++
+ .../Platform/Sdl2/SdlPlatformSharedState.cpp  | 129 ++++++
+ .../Platform/Sdl2/SdlPlatformSharedState.h    |  52 +++
+ src/Library/Platform/Sdl2/SdlWindow.cpp       | 225 +++++++++++
+ src/Library/Platform/Sdl2/SdlWindow.h         |  65 ++++
+ thirdparty/imgui/CMakeLists.txt               |  20 +-
+ 24 files changed, 1639 insertions(+), 13 deletions(-)
+ create mode 100644 src/Library/Platform/Sdl2/CMakeLists.txt
+ create mode 100644 src/Library/Platform/Sdl2/SdlEnumTranslation.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlEnumTranslation.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlEventLoop.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlEventLoop.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlGamepad.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlGamepad.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlLogSource.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlLogSource.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlMain.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlOpenGLContext.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlOpenGLContext.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlPlatform.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlPlatform.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlPlatformSharedState.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlPlatformSharedState.h
+ create mode 100644 src/Library/Platform/Sdl2/SdlWindow.cpp
+ create mode 100644 src/Library/Platform/Sdl2/SdlWindow.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c77f63f..59e26fd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -41,6 +41,7 @@ set(OE_USE_LD_LLD ON CACHE BOOL "Use lld linker if available, note that mold tak
+ set(OE_DISTRIBUTION_BUILD OFF CACHE BOOL "Specify that this is a build for distribution, not a dev build.")
+ set(OE_USE_SANITIZERS "" CACHE STRING "Sanitizers to build with, passed on to -fsanitize=. Empty string disables sanitizers.")
+ set(OE_GL33 OFF CACHE BOOL "Request an OpenGL 3.3 core context and GLSL 330 shaders instead of OpenGL 4.1.")
++set(OE_USE_SDL2 OFF CACHE BOOL "Use SDL2 platform backend instead of SDL3, for platforms where only SDL2 is available.")
+ 
+ if(OE_DISTRIBUTION_BUILD)
+     add_compile_definitions(OE_DISTRIBUTION_BUILD)
+@@ -50,6 +51,10 @@ if(OE_GL33)
+     add_compile_definitions(OE_GL33)
+ endif()
+ 
++if(OE_USE_SDL2)
++    add_compile_definitions(OE_USE_SDL2) # Selects ImGui SDL2 backend in the code that calls into it directly.
++endif()
++
+ # Find ccache / sccache.
+ if(OE_USE_CCACHE)
+     find_program(CCACHE_FOUND ccache)
+diff --git a/CMakeModules/Dependencies.cmake b/CMakeModules/Dependencies.cmake
+index e5ed404..96041fa 100644
+--- a/CMakeModules/Dependencies.cmake
++++ b/CMakeModules/Dependencies.cmake
+@@ -95,13 +95,27 @@ macro(resolve_dependencies) # Intentionally a macro - we want set() to work in p
+     find_package(ZLIB REQUIRED)
+     find_package(FFmpeg REQUIRED)
+ 
+-    find_package(SDL3 CONFIG REQUIRED)
+-    add_library(SDL3OE INTERFACE)
+-    target_link_libraries(SDL3OE INTERFACE SDL3::SDL3)
+-    if(TARGET SDL3::SDL3main) # Not all platforms have SDL3main.
+-        target_link_libraries(SDL3OE INTERFACE SDL3::SDL3main)
++    if(OE_USE_SDL2)
++        # SDL2 platform backend, see src/Library/Platform/Sdl2. Note that we're not linking to SDL2main, the backend
++        # defines SDL_MAIN_HANDLED and calls SDL_SetMainReady() instead.
++        find_package(SDL2 CONFIG REQUIRED)
++        if(TARGET SDL2::SDL2)
++            set(OE_SDL2_TARGET SDL2::SDL2)
++        else()
++            set(OE_SDL2_TARGET SDL2::SDL2-static)
++        endif()
++        add_library(SDL2OE INTERFACE)
++        target_link_libraries(SDL2OE INTERFACE ${OE_SDL2_TARGET})
++        add_library(SDL2::SDL2OE ALIAS SDL2OE)
++    else()
++        find_package(SDL3 CONFIG REQUIRED)
++        add_library(SDL3OE INTERFACE)
++        target_link_libraries(SDL3OE INTERFACE SDL3::SDL3)
++        if(TARGET SDL3::SDL3main) # Not all platforms have SDL3main.
++            target_link_libraries(SDL3OE INTERFACE SDL3::SDL3main)
++        endif()
++        add_library(SDL3::SDL3OE ALIAS SDL3OE)
+     endif()
+-    add_library(SDL3::SDL3OE ALIAS SDL3OE)
+ 
+     # This should find OpenALConfig.cmake that comes with OpenAL Soft.
+     #
+@@ -128,6 +142,10 @@ macro(resolve_dependencies) # Intentionally a macro - we want set() to work in p
+     print_library_found_message(OpenAL OpenAL::OpenAL "")
+     print_library_found_message(ZLIB ZLIB::ZLIB "")
+     print_library_found_message(FFmpeg "" "${AVCODEC_INCLUDE_DIRS}")
+-    print_library_found_message(SDL3 SDL3::SDL3 "")
++    if(OE_USE_SDL2)
++        print_library_found_message(SDL2 ${OE_SDL2_TARGET} "")
++    else()
++        print_library_found_message(SDL3 SDL3::SDL3 "")
++    endif()
+     print_library_found_message(OpenGL OpenGL::GL "")
+ endmacro()
+diff --git a/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp b/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
+index 71ec686..dc73d16 100644
+--- a/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
++++ b/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
+@@ -18,7 +18,11 @@
+ #include <glm/gtc/matrix_transform.hpp>
+ 
+ #include <imgui/backends/imgui_impl_opengl3.h> // NOLINT: not a C system header.
++#ifdef OE_USE_SDL2
++#include <imgui/backends/imgui_impl_sdl2.h> // NOLINT: not a C system header.
++#else
+ #include <imgui/backends/imgui_impl_sdl3.h> // NOLINT: not a C system header.
++#endif
+ 
+ #include "Engine/Engine.h"
+ #include "Engine/Resources/EngineFileSystem.h"
+@@ -3381,7 +3385,11 @@ void OpenGLRenderer::_initImGui() {
+     io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;   // Dont allow ImGui to modify mouse cursor
+ 
+     SDL_Window *sdlWindow = static_cast<SDL_Window *>(window->nativeHandle());
++#ifdef OE_USE_SDL2
++    ImGui_ImplSDL2_InitForOpenGL(sdlWindow, openGLContext->nativeHandle());
++#else
+     ImGui_ImplSDL3_InitForOpenGL(sdlWindow, openGLContext->nativeHandle());
++#endif
+     ImGui_ImplOpenGL3_Init();
+ 
+     // Set ImGui Style
+@@ -3432,7 +3440,11 @@ void OpenGLRenderer::_initImGui() {
+ 
+ void OpenGLRenderer::_shutdownImGui() {
+     ImGui_ImplOpenGL3_Shutdown();
++#ifdef OE_USE_SDL2
++    ImGui_ImplSDL2_Shutdown();
++#else
+     ImGui_ImplSDL3_Shutdown();
++#endif
+     ImGui::DestroyContext();
+ }
+ 
+@@ -3582,7 +3594,11 @@ bool OpenGLRenderer::ReloadShaders() {
+ void OpenGLRenderer::beginOverlays() {
+     ImGui_ImplOpenGL3_NewFrame();
+     // we assume we're always running with SDL
++#ifdef OE_USE_SDL2
++    ImGui_ImplSDL2_NewFrame();
++#else
+     ImGui_ImplSDL3_NewFrame();
++#endif
+     ImGui::NewFrame();
+ }
+ 
+diff --git a/src/GUI/Overlay/OverlayEventHandler.cpp b/src/GUI/Overlay/OverlayEventHandler.cpp
+index dbf49b8..3575b2a 100644
+--- a/src/GUI/Overlay/OverlayEventHandler.cpp
++++ b/src/GUI/Overlay/OverlayEventHandler.cpp
+@@ -1,6 +1,10 @@
+ #include "OverlayEventHandler.h"
+ 
++#ifdef OE_USE_SDL2
++#include <imgui/backends/imgui_impl_sdl2.h>
++#else
+ #include <imgui/backends/imgui_impl_sdl3.h>
++#endif
+ #include <imgui/imgui.h>
+ 
+ #include "Engine/Engine.h"
+@@ -42,6 +46,10 @@ bool OverlayEventHandler::wheelEvent(const PlatformWheelEvent *event) {
+ bool OverlayEventHandler::nativeEvent(const PlatformNativeEvent *event) {
+     // Here we're assuming the native event is coming from SDL
+     const SDL_Event *sdlEvent = static_cast<const SDL_Event *>(event->nativeEvent);
++#ifdef OE_USE_SDL2
++    ImGui_ImplSDL2_ProcessEvent(sdlEvent);
++#else
+     ImGui_ImplSDL3_ProcessEvent(sdlEvent);
++#endif
+     return false;
+ }
+diff --git a/src/Library/Platform/CMakeLists.txt b/src/Library/Platform/CMakeLists.txt
+index 759101e..fae50ed 100644
+--- a/src/Library/Platform/CMakeLists.txt
++++ b/src/Library/Platform/CMakeLists.txt
+@@ -5,4 +5,11 @@ add_subdirectory(Filters)
+ add_subdirectory(Interface)
+ add_subdirectory(Null)
+ add_subdirectory(Proxy)
+-add_subdirectory(Sdl)
++
++# Both backends define the same targets (library_platform_main, library_platform_sdl and
++# library_platform_implementation), so only one of them can ever be part of the build.
++if(OE_USE_SDL2)
++    add_subdirectory(Sdl2)
++else()
++    add_subdirectory(Sdl)
++endif()
+diff --git a/src/Library/Platform/Sdl2/CMakeLists.txt b/src/Library/Platform/Sdl2/CMakeLists.txt
+new file mode 100644
+index 0000000..8f1adf8
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/CMakeLists.txt
+@@ -0,0 +1,44 @@
++cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
++
++# SDL2 port of the SDL3 backend in ../Sdl, used when OE_USE_SDL2 is set. File, class and target names are kept the same
++# as in the SDL3 backend so that the two can be diffed, which is fine because only one of them is ever added to the
++# build, see ../CMakeLists.txt.
++
++set(PLATFORM_SDL_SOURCES
++        SdlEnumTranslation.cpp
++        SdlEventLoop.cpp
++        SdlGamepad.cpp
++        SdlLogSource.cpp
++        SdlOpenGLContext.cpp
++        SdlPlatform.cpp
++        SdlPlatformSharedState.cpp
++        SdlWindow.cpp)
++
++set(PLATFORM_SDL_HEADERS
++        SdlEnumTranslation.h
++        SdlEventLoop.h
++        SdlGamepad.h
++        SdlLogSource.h
++        SdlOpenGLContext.h
++        SdlPlatform.h
++        SdlPlatformSharedState.h
++        SdlWindow.h)
++
++set(PLATFORM_SDL_MAIN_SOURCES
++        SdlMain.cpp)
++
++set(PLATFORM_SDL_MAIN_HEADERS)
++
++# Need to have main in an OBJECT lib so that it's properly exported from Android .so.
++add_library(library_platform_main OBJECT ${PLATFORM_SDL_MAIN_SOURCES} ${PLATFORM_SDL_MAIN_HEADERS})
++target_check_style(library_platform_main)
++target_link_libraries(library_platform_main PRIVATE SDL2::SDL2OE)
++
++add_library(library_platform_sdl STATIC ${PLATFORM_SDL_SOURCES} ${PLATFORM_SDL_HEADERS})
++target_check_style(library_platform_sdl)
++target_link_libraries(library_platform_sdl PUBLIC utility library_logger PRIVATE SDL2::SDL2OE)
++
++# Currently we have only one implementation library defining Platform::createStandardPlatform function, but we used
++# to have two. So we're keeping the old mechanism with an additional library_platform_implementation library.
++add_library(library_platform_implementation INTERFACE)
++target_link_libraries(library_platform_implementation INTERFACE library_platform_sdl)
+diff --git a/src/Library/Platform/Sdl2/SdlEnumTranslation.cpp b/src/Library/Platform/Sdl2/SdlEnumTranslation.cpp
+new file mode 100644
+index 0000000..4787c58
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlEnumTranslation.cpp
+@@ -0,0 +1,245 @@
++#include "SdlEnumTranslation.h"
++
++#include <algorithm>
++#include <cassert>
++
++PlatformKey translateSdlKey(SDL_Keycode key) {
++    switch (key) {
++    case SDLK_F1:               return PlatformKey::KEY_F1;
++    case SDLK_F2:               return PlatformKey::KEY_F2;
++    case SDLK_F3:               return PlatformKey::KEY_F3;
++    case SDLK_F4:               return PlatformKey::KEY_F4;
++    case SDLK_F5:               return PlatformKey::KEY_F5;
++    case SDLK_F6:               return PlatformKey::KEY_F6;
++    case SDLK_F7:               return PlatformKey::KEY_F7;
++    case SDLK_F8:               return PlatformKey::KEY_F8;
++    case SDLK_F9:               return PlatformKey::KEY_F9;
++    case SDLK_F10:              return PlatformKey::KEY_F10;
++    case SDLK_F11:              return PlatformKey::KEY_F11;
++    case SDLK_F12:              return PlatformKey::KEY_F12;
++    case SDLK_F13:              return PlatformKey::KEY_F13;
++    case SDLK_F14:              return PlatformKey::KEY_F14;
++    case SDLK_F15:              return PlatformKey::KEY_F15;
++    case SDLK_F16:              return PlatformKey::KEY_F16;
++    case SDLK_F17:              return PlatformKey::KEY_F17;
++    case SDLK_F18:              return PlatformKey::KEY_F18;
++    case SDLK_F19:              return PlatformKey::KEY_F19;
++    case SDLK_F20:              return PlatformKey::KEY_F20;
++    case SDLK_F21:              return PlatformKey::KEY_F21;
++    case SDLK_F22:              return PlatformKey::KEY_F22;
++    case SDLK_F23:              return PlatformKey::KEY_F23;
++    case SDLK_F24:              return PlatformKey::KEY_F24;
++
++    case SDLK_1:                return PlatformKey::KEY_DIGIT_1;
++    case SDLK_2:                return PlatformKey::KEY_DIGIT_2;
++    case SDLK_3:                return PlatformKey::KEY_DIGIT_3;
++    case SDLK_4:                return PlatformKey::KEY_DIGIT_4;
++    case SDLK_5:                return PlatformKey::KEY_DIGIT_5;
++    case SDLK_6:                return PlatformKey::KEY_DIGIT_6;
++    case SDLK_7:                return PlatformKey::KEY_DIGIT_7;
++    case SDLK_8:                return PlatformKey::KEY_DIGIT_8;
++    case SDLK_9:                return PlatformKey::KEY_DIGIT_9;
++    case SDLK_0:                return PlatformKey::KEY_DIGIT_0;
++
++    case SDLK_a:                return PlatformKey::KEY_A;
++    case SDLK_b:                return PlatformKey::KEY_B;
++    case SDLK_c:                return PlatformKey::KEY_C;
++    case SDLK_d:                return PlatformKey::KEY_D;
++    case SDLK_e:                return PlatformKey::KEY_E;
++    case SDLK_f:                return PlatformKey::KEY_F;
++    case SDLK_g:                return PlatformKey::KEY_G;
++    case SDLK_h:                return PlatformKey::KEY_H;
++    case SDLK_i:                return PlatformKey::KEY_I;
++    case SDLK_j:                return PlatformKey::KEY_J;
++    case SDLK_k:                return PlatformKey::KEY_K;
++    case SDLK_l:                return PlatformKey::KEY_L;
++    case SDLK_m:                return PlatformKey::KEY_M;
++    case SDLK_n:                return PlatformKey::KEY_N;
++    case SDLK_o:                return PlatformKey::KEY_O;
++    case SDLK_p:                return PlatformKey::KEY_P;
++    case SDLK_q:                return PlatformKey::KEY_Q;
++    case SDLK_r:                return PlatformKey::KEY_R;
++    case SDLK_s:                return PlatformKey::KEY_S;
++    case SDLK_t:                return PlatformKey::KEY_T;
++    case SDLK_u:                return PlatformKey::KEY_U;
++    case SDLK_v:                return PlatformKey::KEY_V;
++    case SDLK_w:                return PlatformKey::KEY_W;
++    case SDLK_x:                return PlatformKey::KEY_X;
++    case SDLK_y:                return PlatformKey::KEY_Y;
++    case SDLK_z:                return PlatformKey::KEY_Z;
++
++    case SDLK_RETURN:           return PlatformKey::KEY_RETURN;
++    case SDLK_ESCAPE:           return PlatformKey::KEY_ESCAPE;
++    case SDLK_TAB:              return PlatformKey::KEY_TAB;
++    case SDLK_BACKSPACE:        return PlatformKey::KEY_BACKSPACE;
++    case SDLK_SPACE:            return PlatformKey::KEY_SPACE;
++    case SDLK_DECIMALSEPARATOR: return PlatformKey::KEY_DECIMAL;
++    case SDLK_SEMICOLON:        return PlatformKey::KEY_SEMICOLON;
++    case SDLK_PERIOD:           return PlatformKey::KEY_PERIOD;
++    case SDLK_SLASH:            return PlatformKey::KEY_SLASH;
++    case SDLK_QUOTE:            return PlatformKey::KEY_SINGLEQUOTE;
++    case SDLK_BACKSLASH:        return PlatformKey::KEY_BACKSLASH;
++    case SDLK_BACKQUOTE:        return PlatformKey::KEY_TILDE;
++
++    case SDLK_KP_MINUS:         return PlatformKey::KEY_SUBTRACT;
++    case SDLK_KP_PLUS:          return PlatformKey::KEY_ADD;
++    case SDLK_COMMA:            return PlatformKey::KEY_COMMA;
++    case SDLK_LEFTBRACKET:      return PlatformKey::KEY_LEFTBRACKET;
++    case SDLK_RIGHTBRACKET:     return PlatformKey::KEY_RIGHTBRACKET;
++
++    case SDLK_LEFT:             return PlatformKey::KEY_LEFT;
++    case SDLK_RIGHT:            return PlatformKey::KEY_RIGHT;
++    case SDLK_UP:               return PlatformKey::KEY_UP;
++    case SDLK_DOWN:             return PlatformKey::KEY_DOWN;
++
++    case SDLK_PRINTSCREEN:      return PlatformKey::KEY_PRINTSCREEN;
++
++    case SDLK_INSERT:           return PlatformKey::KEY_INSERT;
++    case SDLK_HOME:             return PlatformKey::KEY_HOME;
++    case SDLK_END:              return PlatformKey::KEY_END;
++    case SDLK_PAGEUP:           return PlatformKey::KEY_PAGEUP;
++    case SDLK_PAGEDOWN:         return PlatformKey::KEY_PAGEDOWN;
++    case SDLK_DELETE:           return PlatformKey::KEY_DELETE;
++    case SDLK_SELECT:           return PlatformKey::KEY_SELECT;
++
++    case SDLK_LCTRL:            return PlatformKey::KEY_CONTROL;
++    case SDLK_RCTRL:            return PlatformKey::KEY_CONTROL;
++    case SDLK_LALT:             return PlatformKey::KEY_ALT;
++    case SDLK_RALT:             return PlatformKey::KEY_ALT;
++    case SDLK_LSHIFT:           return PlatformKey::KEY_SHIFT;
++    case SDLK_RSHIFT:           return PlatformKey::KEY_SHIFT;
++
++    case SDLK_KP_0:             return PlatformKey::KEY_NUMPAD_0;
++    case SDLK_KP_1:             return PlatformKey::KEY_NUMPAD_1;
++    case SDLK_KP_2:             return PlatformKey::KEY_NUMPAD_2;
++    case SDLK_KP_3:             return PlatformKey::KEY_NUMPAD_3;
++    case SDLK_KP_4:             return PlatformKey::KEY_NUMPAD_4;
++    case SDLK_KP_5:             return PlatformKey::KEY_NUMPAD_5;
++    case SDLK_KP_6:             return PlatformKey::KEY_NUMPAD_6;
++    case SDLK_KP_7:             return PlatformKey::KEY_NUMPAD_7;
++    case SDLK_KP_8:             return PlatformKey::KEY_NUMPAD_8;
++    case SDLK_KP_9:             return PlatformKey::KEY_NUMPAD_9;
++    case SDLK_KP_ENTER:         return PlatformKey::KEY_RETURN;
++
++    default:                    return PlatformKey::KEY_NONE;
++    }
++}
++
++PlatformKey translateSdlGamepadButton(SDL_GameControllerButton button) {
++    switch (button) {
++    case SDL_CONTROLLER_BUTTON_A:               return PlatformKey::KEY_GAMEPAD_A;
++    case SDL_CONTROLLER_BUTTON_B:               return PlatformKey::KEY_GAMEPAD_B;
++    case SDL_CONTROLLER_BUTTON_X:               return PlatformKey::KEY_GAMEPAD_X;
++    case SDL_CONTROLLER_BUTTON_Y:               return PlatformKey::KEY_GAMEPAD_Y;
++
++    case SDL_CONTROLLER_BUTTON_DPAD_LEFT:       return PlatformKey::KEY_GAMEPAD_LEFT;
++    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:      return PlatformKey::KEY_GAMEPAD_RIGHT;
++    case SDL_CONTROLLER_BUTTON_DPAD_UP:         return PlatformKey::KEY_GAMEPAD_UP;
++    case SDL_CONTROLLER_BUTTON_DPAD_DOWN:       return PlatformKey::KEY_GAMEPAD_DOWN;
++
++    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:    return PlatformKey::KEY_GAMEPAD_L1;
++    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:   return PlatformKey::KEY_GAMEPAD_R1;
++    case SDL_CONTROLLER_BUTTON_LEFTSTICK:       return PlatformKey::KEY_GAMEPAD_L3;
++    case SDL_CONTROLLER_BUTTON_RIGHTSTICK:      return PlatformKey::KEY_GAMEPAD_R3;
++
++    case SDL_CONTROLLER_BUTTON_START:           return PlatformKey::KEY_GAMEPAD_START;
++    case SDL_CONTROLLER_BUTTON_BACK:            return PlatformKey::KEY_GAMEPAD_BACK;
++
++    case SDL_CONTROLLER_BUTTON_GUIDE:           return PlatformKey::KEY_GAMEPAD_GUIDE;
++
++    // on DS4 touchpad is working like mouse by default and this event treated as left mouse click, so do not expose.
++    // case SDL_CONTROLLER_BUTTON_TOUCHPAD:        return PlatformKey::KEY_GAMEPAD_TOUCHPAD;
++
++    default:                                    return PlatformKey::KEY_NONE;
++    }
++}
++
++PlatformKey translateSdlGamepadAxis(SDL_GameControllerAxis axis) {
++    switch (axis) {
++    case SDL_CONTROLLER_AXIS_LEFTX:         return PlatformKey::KEY_GAMEPAD_LEFTSTICK_RIGHT;
++    case SDL_CONTROLLER_AXIS_LEFTY:         return PlatformKey::KEY_GAMEPAD_LEFTSTICK_DOWN;
++    case SDL_CONTROLLER_AXIS_RIGHTX:        return PlatformKey::KEY_GAMEPAD_RIGHTSTICK_RIGHT;
++    case SDL_CONTROLLER_AXIS_RIGHTY:        return PlatformKey::KEY_GAMEPAD_RIGHTSTICK_DOWN;
++    case SDL_CONTROLLER_AXIS_TRIGGERLEFT:   return PlatformKey::KEY_GAMEPAD_L2;
++    case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:  return PlatformKey::KEY_GAMEPAD_R2;
++    default:                                return PlatformKey::KEY_NONE;
++    }
++}
++
++PlatformModifiers translateSdlMods(uint16_t mods) {
++    PlatformModifiers result;
++    if (static_cast<bool>(mods & KMOD_SHIFT) ^ static_cast<bool>(mods & KMOD_CAPS))
++        result |= MOD_SHIFT;
++    if (mods & KMOD_CTRL)
++        result |= MOD_CTRL;
++    if (mods & KMOD_ALT)
++        result |= MOD_ALT;
++    if (mods & KMOD_GUI)
++        result |= MOD_META;
++    if (mods & KMOD_NUM)
++        result |= MOD_NUM;
++    return result;
++}
++
++PlatformMouseButton translateSdlMouseButton(uint8_t mouseButton) {
++    switch (mouseButton) {
++    case SDL_BUTTON_LEFT:   return BUTTON_LEFT;
++    case SDL_BUTTON_MIDDLE: return BUTTON_MIDDLE;
++    case SDL_BUTTON_RIGHT:  return BUTTON_RIGHT;
++    default:                return BUTTON_NONE;
++    }
++}
++
++PlatformMouseButtons translateSdlMouseButtons(uint32_t mouseButtons) {
++    PlatformMouseButtons result;
++    if (mouseButtons & SDL_BUTTON_LMASK)
++        result |= BUTTON_LEFT;
++    if (mouseButtons & SDL_BUTTON_MMASK)
++        result |= BUTTON_MIDDLE;
++    if (mouseButtons & SDL_BUTTON_RMASK)
++        result |= BUTTON_RIGHT;
++    return result;
++}
++
++int translatePlatformVSyncMode(PlatformVSyncMode vsyncMode) {
++    switch (vsyncMode) {
++    default:                assert(false); [[fallthrough]];
++    case GL_VSYNC_NONE:     return 0;
++    case GL_VSYNC_ADAPTIVE: return -1;
++    case GL_VSYNC_NORMAL:   return 1;
++    }
++}
++
++SDL_GLprofile translatePlatformOpenGLProfile(PlatformOpenGLProfile profile) {
++    switch (profile) {
++    default:                        assert(false); [[fallthrough]];
++    case GL_PROFILE_CORE:           return SDL_GL_CONTEXT_PROFILE_CORE;
++    case GL_PROFILE_COMPATIBILITY:  return SDL_GL_CONTEXT_PROFILE_COMPATIBILITY;
++    case GL_PROFILE_ES:             return SDL_GL_CONTEXT_PROFILE_ES;
++    }
++}
++
++SDL_LogPriority translatePlatformLogLevel(LogLevel logLevel) {
++    switch (logLevel) {
++    default:            assert(false); [[fallthrough]];
++    case LOG_TRACE:     return SDL_LOG_PRIORITY_VERBOSE;
++    case LOG_DEBUG:     return SDL_LOG_PRIORITY_DEBUG;
++    case LOG_INFO:      return SDL_LOG_PRIORITY_INFO;
++    case LOG_WARNING:   return SDL_LOG_PRIORITY_WARN;
++    case LOG_ERROR:     return SDL_LOG_PRIORITY_ERROR;
++    case LOG_CRITICAL:
++    case LOG_NONE:      return SDL_LOG_PRIORITY_CRITICAL; // SDL doesn't have LOG_NONE, so this is the best we can do.
++    }
++}
++
++LogLevel translateSdlLogLevel(SDL_LogPriority logLevel) {
++    switch (logLevel) {
++    default:                        assert(false); [[fallthrough]];
++    case SDL_LOG_PRIORITY_VERBOSE:  return LOG_TRACE;
++    case SDL_LOG_PRIORITY_DEBUG:    return LOG_DEBUG;
++    case SDL_LOG_PRIORITY_INFO:     return LOG_INFO;
++    case SDL_LOG_PRIORITY_WARN:     return LOG_WARNING;
++    case SDL_LOG_PRIORITY_ERROR:    return LOG_ERROR;
++    case SDL_LOG_PRIORITY_CRITICAL: return LOG_CRITICAL;
++    }
++}
+diff --git a/src/Library/Platform/Sdl2/SdlEnumTranslation.h b/src/Library/Platform/Sdl2/SdlEnumTranslation.h
+new file mode 100644
+index 0000000..bf19ece
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlEnumTranslation.h
+@@ -0,0 +1,19 @@
++#pragma once
++
++#include <SDL.h>
++
++#include "Library/Platform/Interface/PlatformEnums.h"
++#include "Library/Platform/Interface/PlatformOpenGLOptions.h"
++
++#include "Library/Logger/LogEnums.h"
++
++PlatformKey translateSdlKey(SDL_Keycode key);
++PlatformKey translateSdlGamepadButton(SDL_GameControllerButton button);
++PlatformKey translateSdlGamepadAxis(SDL_GameControllerAxis axis);
++PlatformModifiers translateSdlMods(uint16_t mods);
++PlatformMouseButton translateSdlMouseButton(uint8_t mouseButton);
++PlatformMouseButtons translateSdlMouseButtons(uint32_t mouseButtons);
++int translatePlatformVSyncMode(PlatformVSyncMode vsyncMode);
++SDL_GLprofile translatePlatformOpenGLProfile(PlatformOpenGLProfile profile);
++SDL_LogPriority translatePlatformLogLevel(LogLevel logLevel);
++LogLevel translateSdlLogLevel(SDL_LogPriority logLevel);
+diff --git a/src/Library/Platform/Sdl2/SdlEventLoop.cpp b/src/Library/Platform/Sdl2/SdlEventLoop.cpp
+new file mode 100644
+index 0000000..1b2874f
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlEventLoop.cpp
+@@ -0,0 +1,366 @@
++#include "SdlEventLoop.h"
++
++#include <SDL.h>
++
++#include <algorithm>
++#include <cassert>
++#include <vector>
++
++#include "Library/Platform/Interface/PlatformEventHandler.h"
++#include "Library/Platform/Interface/PlatformEnums.h"
++
++#include "Utility/Segment.h"
++#include "Utility/ScopeGuard.h"
++
++#include "SdlPlatformSharedState.h"
++#include "SdlEnumTranslation.h"
++#include "SdlWindow.h"
++#include "SdlGamepad.h"
++
++SdlEventLoop::SdlEventLoop(SdlPlatformSharedState *state): _state(state) {
++    assert(state);
++    _state->registerEventLoop(this);
++}
++
++SdlEventLoop::~SdlEventLoop() {
++    _state->unregisterEventLoop(this);
++}
++
++void SdlEventLoop::exec(PlatformEventHandler *eventHandler) {
++    assert(eventHandler);
++
++    _quitRequested = false;
++
++    SDL_Event e;
++    while (SDL_WaitEvent(&e)) {
++        dispatchEvent(eventHandler, &e);
++
++        if (_quitRequested)
++            break;
++    }
++}
++
++void SdlEventLoop::quit() {
++    _quitRequested = true;
++}
++
++void SdlEventLoop::processMessages(PlatformEventHandler *eventHandler) {
++    assert(eventHandler);
++
++    SDL_Event e;
++    while (SDL_PollEvent(&e))
++        dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::waitForMessages() {
++    if (SDL_WaitEvent(nullptr) == 0)
++        _state->logSdlError("SDL_WaitEvent");
++}
++
++void SdlEventLoop::dispatchEvent(PlatformEventHandler *eventHandler, const SDL_Event *event) {
++    dispatchNativeEvent(eventHandler, event);
++
++    switch(event->type) {
++    case SDL_QUIT:
++        dispatchQuitEvent(eventHandler, &event->quit);
++        break;
++    case SDL_KEYUP:
++    case SDL_KEYDOWN:
++        dispatchKeyEvent(eventHandler, &event->key);
++        break;
++    case SDL_MOUSEMOTION:
++        dispatchMouseMoveEvent(eventHandler, &event->motion);
++        break;
++    case SDL_MOUSEBUTTONUP:
++    case SDL_MOUSEBUTTONDOWN:
++        dispatchMouseButtonEvent(eventHandler, &event->button);
++        break;
++    case SDL_MOUSEWHEEL:
++        dispatchMouseWheelEvent(eventHandler, &event->wheel);
++        break;
++    case SDL_FINGERUP:
++    case SDL_FINGERDOWN:
++    case SDL_FINGERMOTION:
++        dispatchTouchFingerEvent(eventHandler, &event->tfinger);
++        break;
++    case SDL_WINDOWEVENT:
++        // SDL2 has a single window event type, the actual event is in event->window.event.
++        dispatchWindowEvent(eventHandler, &event->window);
++        break;
++    case SDL_CONTROLLERDEVICEADDED:
++        dispatchGamepadConnectedEvent(eventHandler, &event->cdevice);
++        break;
++    case SDL_CONTROLLERDEVICEREMOVED:
++        dispatchGamepadDisconnectedEvent(eventHandler, &event->cdevice);
++        break;
++    case SDL_CONTROLLERBUTTONDOWN:
++    case SDL_CONTROLLERBUTTONUP:
++        dispatchGamepadButtonEvent(eventHandler, &event->cbutton);
++        break;
++    case SDL_CONTROLLERAXISMOTION:
++        dispatchGamepadAxisEvent(eventHandler, &event->caxis);
++        break;
++    case SDL_TEXTINPUT:
++        dispatchTextInputEvent(eventHandler, &event->text);
++        break;
++    default:
++        break;
++    }
++}
++
++void SdlEventLoop::dispatchEvent(PlatformEventHandler *eventHandler, const PlatformEvent *event) {
++    assert(Segment(EVENT_FIRST, EVENT_LAST).contains(event->type));
++
++    eventHandler->event(event);
++}
++
++void SdlEventLoop::dispatchNativeEvent(PlatformEventHandler *eventHandler, const SDL_Event *event) {
++    PlatformNativeEvent e;
++    e.type = EVENT_NATIVE;
++    e.nativeEvent = event;
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchQuitEvent(PlatformEventHandler *eventHandler, const SDL_QuitEvent *event) {
++    // We don't notify the app of a "termination event", but close all windows instead.
++    PlatformWindowEvent e;
++    e.type = EVENT_WINDOW_CLOSE_REQUEST;
++
++    // Saving the ids and not window pointers here is intentional as literally anything could happen
++    // inside the event handlers.
++    std::vector<uint32_t> windowIds = _state->allWindowIds();
++    for (uint32_t id : windowIds) {
++        if (PlatformWindow *window = _state->window(id)) { // Window still alive?
++            e.window = window;
++            dispatchEvent(eventHandler, &e);
++        }
++    }
++}
++
++void SdlEventLoop::dispatchKeyEvent(PlatformEventHandler *eventHandler, const SDL_KeyboardEvent *event) {
++    if (event->windowID == 0)
++        return; // This happens.
++
++    PlatformKeyEvent e;
++    e.window = _state->window(event->windowID);
++    e.type = event->type == SDL_KEYUP ? EVENT_KEY_RELEASE : EVENT_KEY_PRESS;
++    e.isAutoRepeat = event->repeat;
++    e.mods = translateSdlMods(event->keysym.mod);
++
++    // SDL3 backend relies on KEYCODE_OPTION_LATIN_LETTERS to get latin keycodes for letter keys with non-latin keyboard
++    // layouts (e.g. Russian). SDL2 doesn't have it, and returns non-latin keycodes for these keys on some platforms
++    // (e.g. X11). So we do the same thing manually - fall back to US layout for letter keys.
++    SDL_Keycode key = event->keysym.sym;
++    if (key >= 0x80 && !(key & SDLK_SCANCODE_MASK) && event->keysym.scancode >= SDL_SCANCODE_A && event->keysym.scancode <= SDL_SCANCODE_Z)
++        key = SDLK_a + (event->keysym.scancode - SDL_SCANCODE_A);
++    e.key = translateSdlKey(key);
++
++    if (e.key != PlatformKey::KEY_NONE)
++        dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchMouseMoveEvent(PlatformEventHandler *eventHandler, const SDL_MouseMotionEvent *event) {
++    if (event->windowID == 0)
++        return; // This happens.
++
++    PlatformMouseEvent e;
++    e.type = EVENT_MOUSE_MOVE;
++    e.window = _state->window(event->windowID);
++    e.button = BUTTON_NONE;
++    e.buttons = translateSdlMouseButtons(event->state);
++    e.isDoubleClick = false;
++    e.pos = Pointi(event->x, event->y);
++    e.rel = Pointi(event->xrel, event->yrel);
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchMouseButtonEvent(PlatformEventHandler *eventHandler, const SDL_MouseButtonEvent *event) {
++    if (event->windowID == 0)
++        return; // This happens.
++
++    PlatformMouseEvent e;
++    e.type = event->type == SDL_MOUSEBUTTONUP ? EVENT_MOUSE_BUTTON_RELEASE : EVENT_MOUSE_BUTTON_PRESS;
++    e.window = _state->window(event->windowID);
++    e.button = translateSdlMouseButton(event->button);
++    e.buttons = translateSdlMouseButtons(SDL_GetMouseState(nullptr, nullptr));
++    e.pos = Pointi(event->x, event->y);
++
++    if (event->type == SDL_MOUSEBUTTONUP) {
++        e.isDoubleClick = false;
++    } else {
++#ifndef __ANDROID__
++        // Number of clicks as reported by SDL starts at 1, and by clicking repeatedly you can get this number
++        // literally to 100s. We just treat every 2nd click as a double click.
++        assert(event->clicks > 0);
++        e.isDoubleClick = (event->clicks % 2 == 0);
++#else
++        // On Android it seems to start with 0.
++        e.isDoubleClick = (event->clicks % 2 == 1);
++#endif
++    }
++
++    if (e.button != BUTTON_NONE)
++        dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchMouseWheelEvent(PlatformEventHandler *eventHandler, const SDL_MouseWheelEvent *event) {
++    if (event->windowID == 0)
++        return; // This happens.
++
++    PlatformWheelEvent e;
++    e.type = EVENT_MOUSE_WHEEL;
++    e.window = _state->window(event->windowID);
++    // SDL inverts event->y for us when event->direction == SDL_MOUSEWHEEL_FLIPPED, so we don't need to check for it.
++    e.angleDelta = Pointi(event->x, event->y);
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchTouchFingerEvent(PlatformEventHandler *eventHandler, const SDL_TouchFingerEvent *event) {
++    if (event->windowID == 0)
++        return; // This happens.
++
++    PlatformMouseEvent e;
++    switch (event->type) {
++    case SDL_FINGERDOWN:
++        e.type = EVENT_MOUSE_BUTTON_PRESS;
++        e.button = BUTTON_LEFT;
++        e.buttons = BUTTON_LEFT; // Not calling SDL_GetMouseState here because if we want buttons to sync up properly
++                                 // then we'd also need to get touch state from inside the mouse event.
++        break;
++    case SDL_FINGERUP:
++        e.type = EVENT_MOUSE_BUTTON_RELEASE;
++        e.button = BUTTON_LEFT;
++        break;
++    case SDL_FINGERMOTION:
++        e.type = EVENT_MOUSE_MOVE;
++        break;
++    default:
++        return;
++    }
++    e.window = _state->window(event->windowID);
++    e.pos = Pointi(event->x * e.window->size().w, event->y * e.window->size().h);
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchWindowEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event) {
++    if (event->windowID == 0)
++        return; // Shouldn't really happen, but we check just in case.
++
++    PlatformEventType type = EVENT_INVALID;
++
++    switch (event->event) {
++    case SDL_WINDOWEVENT_FOCUS_GAINED:
++        type = EVENT_WINDOW_ACTIVATE;
++        break;
++    case SDL_WINDOWEVENT_FOCUS_LOST:
++        type = EVENT_WINDOW_DEACTIVATE;
++        break;
++    case SDL_WINDOWEVENT_CLOSE:
++        type = EVENT_WINDOW_CLOSE_REQUEST;
++        break;
++    case SDL_WINDOWEVENT_MOVED:
++        dispatchWindowMoveEvent(eventHandler, event);
++        return;
++    case SDL_WINDOWEVENT_SIZE_CHANGED:
++        // SDL reports window resizes with two events:
++        // SDL_WINDOWEVENT_RESIZED - this one is fired only for resizes triggered by user / window manager.
++        // SDL_WINDOWEVENT_SIZE_CHANGED - this one is fired every time window size changes, including with a call to
++        //                                SDL_SetWindowSize.
++        // We obviously need the latter of the two.
++        //
++        // Note that unlike SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED in SDL3 this reports the size in window coordinates.
++        // We don't pass SDL_WINDOW_ALLOW_HIGHDPI when creating windows, so these are the same as pixels.
++        dispatchWindowResizeEvent(eventHandler, event);
++        return;
++    default:
++        return;
++    }
++
++    PlatformWindowEvent e;
++    e.type = type;
++    e.window = _state->window(event->windowID);
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchWindowMoveEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event) {
++    assert(event->windowID != 0); // Checked by caller.
++
++    PlatformMoveEvent e;
++    e.type = EVENT_WINDOW_MOVE;
++    e.window = _state->window(event->windowID);
++    e.pos = {event->data1, event->data2};
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchWindowResizeEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event) {
++    assert(event->windowID != 0); // Checked by caller.
++
++    PlatformResizeEvent e;
++    e.type = EVENT_WINDOW_RESIZE;
++    e.window = _state->window(event->windowID);
++    e.size = {event->data1, event->data2};
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchGamepadConnectedEvent(PlatformEventHandler *eventHandler, const SDL_ControllerDeviceEvent *event) {
++    PlatformGamepadEvent e;
++    e.type = EVENT_GAMEPAD_CONNECTED;
++    e.gamepad = _state->initializeGamepad(event->which); // Note: for SDL_CONTROLLERDEVICEADDED this is a device index.
++    if (!e.gamepad)
++        return;
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchGamepadDisconnectedEvent(PlatformEventHandler *eventHandler, const SDL_ControllerDeviceEvent *event) {
++    PlatformGamepadEvent e;
++    e.type = EVENT_GAMEPAD_DISCONNECTED;
++    e.gamepad = _state->gamepad(event->which); // And here it's joystick instance id.
++    if (!e.gamepad)
++        return;
++
++    MM_AT_SCOPE_EXIT(_state->deinitializeGamepad(event->which));
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchGamepadButtonEvent(PlatformEventHandler *eventHandler, const SDL_ControllerButtonEvent *event) {
++    PlatformGamepadKeyEvent e;
++    e.gamepad = _state->gamepad(event->which);
++    e.type = event->type == SDL_CONTROLLERBUTTONUP ? EVENT_GAMEPAD_KEY_RELEASE : EVENT_GAMEPAD_KEY_PRESS;
++    e.key = translateSdlGamepadButton(static_cast<SDL_GameControllerButton>(event->button));
++
++    if (!e.gamepad || e.key == PlatformKey::KEY_NONE)
++        return;
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchGamepadAxisEvent(PlatformEventHandler *eventHandler, const SDL_ControllerAxisEvent *event) {
++    PlatformGamepadAxisEvent e;
++    e.gamepad = _state->gamepad(event->which);
++    e.type = EVENT_GAMEPAD_AXIS;
++    e.axis = translateSdlGamepadAxis(static_cast<SDL_GameControllerAxis>(event->axis));
++    e.value = std::clamp(event->value / 31767.0f, -1.0f, 1.0f);
++
++    if (!e.gamepad || e.axis == PlatformKey::KEY_NONE)
++        return;
++
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchTextInputEvent(PlatformEventHandler* eventHandler, const SDL_TextInputEvent* event) {
++    // Unlike SDL3, SDL2 has text input enabled by default on desktop platforms, so we're getting these events all the
++    // time, and SDL2 sets windowID to 0 if no window has keyboard focus.
++    if (event->windowID == 0)
++        return;
++
++    PlatformTextInputEvent e;
++    e.type = EVENT_TEXT_INPUT;
++    e.window = _state->window(event->windowID);
++    e.text = event->text;
++
++    dispatchEvent(eventHandler, &e);
++}
+diff --git a/src/Library/Platform/Sdl2/SdlEventLoop.h b/src/Library/Platform/Sdl2/SdlEventLoop.h
+new file mode 100644
+index 0000000..96b7d63
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlEventLoop.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++#include <SDL.h>
++
++#include "Library/Platform/Interface/PlatformEventLoop.h"
++#include "Library/Platform/Interface/PlatformEvents.h"
++
++class SdlPlatformSharedState;
++
++class SdlEventLoop: public PlatformEventLoop {
++ public:
++    explicit SdlEventLoop(SdlPlatformSharedState *state);
++    virtual ~SdlEventLoop();
++
++    virtual void exec(PlatformEventHandler *eventHandler) override;
++    virtual void quit() override;
++
++    virtual void processMessages(PlatformEventHandler *eventHandler) override;
++    virtual void waitForMessages() override;
++
++ private:
++    void dispatchEvent(PlatformEventHandler *eventHandler, const SDL_Event *event);
++    void dispatchEvent(PlatformEventHandler *eventHandler, const PlatformEvent *event);
++    void dispatchNativeEvent(PlatformEventHandler *eventHandler, const SDL_Event *event);
++    void dispatchQuitEvent(PlatformEventHandler *eventHandler, const SDL_QuitEvent *event);
++    void dispatchKeyEvent(PlatformEventHandler *eventHandler, const SDL_KeyboardEvent *event);
++    void dispatchMouseMoveEvent(PlatformEventHandler *eventHandler, const SDL_MouseMotionEvent *event);
++    void dispatchMouseButtonEvent(PlatformEventHandler *eventHandler, const SDL_MouseButtonEvent *event);
++    void dispatchMouseWheelEvent(PlatformEventHandler *eventHandler, const SDL_MouseWheelEvent *event);
++    void dispatchTouchFingerEvent(PlatformEventHandler *eventHandler, const SDL_TouchFingerEvent *event);
++    void dispatchWindowEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event);
++    void dispatchWindowMoveEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event);
++    void dispatchWindowResizeEvent(PlatformEventHandler *eventHandler, const SDL_WindowEvent *event);
++    void dispatchGamepadConnectedEvent(PlatformEventHandler *eventHandler, const SDL_ControllerDeviceEvent *event);
++    void dispatchGamepadDisconnectedEvent(PlatformEventHandler *eventHandler, const SDL_ControllerDeviceEvent *event);
++    void dispatchGamepadButtonEvent(PlatformEventHandler *eventHandler, const SDL_ControllerButtonEvent *event);
++    void dispatchGamepadAxisEvent(PlatformEventHandler *eventHandler, const SDL_ControllerAxisEvent *event);
++    void dispatchTextInputEvent(PlatformEventHandler *eventHandler, const SDL_TextInputEvent *event);
++
++ private:
++    SdlPlatformSharedState *_state = nullptr;
++    bool _quitRequested = false;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlGamepad.cpp b/src/Library/Platform/Sdl2/SdlGamepad.cpp
+new file mode 100644
+index 0000000..48f16b3
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlGamepad.cpp
+@@ -0,0 +1,30 @@
++#include "SdlGamepad.h"
++
++#include <cassert>
++#include <string>
++
++#include "SdlPlatformSharedState.h"
++
++SdlGamepad::SdlGamepad(SdlPlatformSharedState *state, SDL_GameController *gamepad, SDL_JoystickID id): _state(state), _gamepad(gamepad), _id(id) {
++    assert(state);
++    assert(gamepad);
++}
++
++SdlGamepad::~SdlGamepad() {
++    SDL_GameControllerClose(_gamepad);
++}
++
++std::string SdlGamepad::model() const {
++    const char *model = SDL_GameControllerName(_gamepad);
++    if (model != NULL)
++        return model;
++
++    return {};
++}
++
++std::string SdlGamepad::serial() const {
++    const char *serial = SDL_GameControllerGetSerial(_gamepad);
++    if (serial != NULL)
++        return serial;
++    return {};
++}
+diff --git a/src/Library/Platform/Sdl2/SdlGamepad.h b/src/Library/Platform/Sdl2/SdlGamepad.h
+new file mode 100644
+index 0000000..c626f4f
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlGamepad.h
+@@ -0,0 +1,27 @@
++#pragma once
++
++#include <SDL.h>
++
++#include <string>
++
++#include "Library/Platform/Interface/PlatformGamepad.h"
++
++class SdlPlatformSharedState;
++
++class SdlGamepad: public PlatformGamepad {
++ public:
++    SdlGamepad(SdlPlatformSharedState *state, SDL_GameController *gamepad, SDL_JoystickID id);
++    virtual ~SdlGamepad();
++
++    virtual std::string model() const override;
++    virtual std::string serial() const override;
++
++    SDL_JoystickID id() {
++        return _id;
++    }
++
++ private:
++    SdlPlatformSharedState *_state = nullptr;
++    SDL_GameController *_gamepad = nullptr;
++    SDL_JoystickID _id = -1;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlLogSource.cpp b/src/Library/Platform/Sdl2/SdlLogSource.cpp
+new file mode 100644
+index 0000000..a05e51d
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlLogSource.cpp
+@@ -0,0 +1,26 @@
++#include "SdlLogSource.h"
++
++#include <SDL_log.h>
++
++#include "SdlEnumTranslation.h"
++
++LogLevel SdlLogSource::level() const {
++    // `SDL_LOG_CATEGORY_CUSTOM` will query `SDL_default_priority` on a call to `SDL_LogGetPriority`.
++    return translateSdlLogLevel(SDL_LogGetPriority(SDL_LOG_CATEGORY_CUSTOM));
++}
++
++void SdlLogSource::setLevel(LogLevel logLevel) {
++    SDL_LogPriority assertPriority = SDL_LogGetPriority(SDL_LOG_CATEGORY_ASSERT);
++
++    // This sets default log priority. Note that this call is better than going through all the different
++    // categories and calling `SDL_LogSetPriority` because it sets a single global variable inside SDL
++    // (`SDL_default_priority`). Making several calls would instead allocate a linked list of category-priority
++    // pairs which will then be traversed in O(n) every time `SDL_Log` is called.
++    SDL_LogSetAllPriority(translatePlatformLogLevel(logLevel));
++
++    // Then we need to roll back assert priority. All SDL asserts are issued at `SDL_LOG_PRIORITY_WARN` which
++    // makes little sense, they should really be at `SDL_LOG_PRIORITY_CRITICAL`. See code in `sdlLogCallback`.
++    SDL_LogSetPriority(SDL_LOG_CATEGORY_ASSERT, assertPriority);
++
++    // Note that we don't touch SDL_LOG_CATEGORY_APPLICATION because we're not using it.
++}
+diff --git a/src/Library/Platform/Sdl2/SdlLogSource.h b/src/Library/Platform/Sdl2/SdlLogSource.h
+new file mode 100644
+index 0000000..2388fe4
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlLogSource.h
+@@ -0,0 +1,9 @@
++#pragma once
++
++#include "Library/Logger/LogSource.h"
++
++class SdlLogSource: public LogSource {
++ public:
++    virtual LogLevel level() const override;
++    virtual void setLevel(LogLevel level) override;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlMain.cpp b/src/Library/Platform/Sdl2/SdlMain.cpp
+new file mode 100644
+index 0000000..263f196
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlMain.cpp
+@@ -0,0 +1,11 @@
++// We don't use SDL2main as it's not available in all SDL2 ports. Instead, we tell SDL not to touch main, and call
++// SDL_SetMainReady() before SDL_Init(), see SdlPlatform.cpp.
++#define SDL_MAIN_HANDLED
++#include <SDL.h>
++
++int platformMain(int argc, char **argv);
++
++// Thanks to SDL_MAIN_HANDLED this does NOT get #defined by SDL into SDL_main.
++int main(int argc, char **argv) {
++    return platformMain(argc, argv);
++}
+diff --git a/src/Library/Platform/Sdl2/SdlOpenGLContext.cpp b/src/Library/Platform/Sdl2/SdlOpenGLContext.cpp
+new file mode 100644
+index 0000000..9024d37
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlOpenGLContext.cpp
+@@ -0,0 +1,47 @@
++#include "SdlOpenGLContext.h"
++
++#include <cassert>
++
++#include "SdlPlatformSharedState.h"
++
++SdlOpenGLContext::SdlOpenGLContext(SdlPlatformSharedState *state, SDL_Window *window, SDL_GLContext context): _state(state), _window(window), _context(context) {
++    assert(state);
++    assert(window);
++    assert(context);
++}
++
++SdlOpenGLContext::~SdlOpenGLContext() {}
++
++bool SdlOpenGLContext::bind() {
++    bool succeeded = SDL_GL_MakeCurrent(_window, _context) == 0;
++
++    if (!succeeded)
++        _state->logSdlError("SDL_GL_MakeCurrent");
++
++    return succeeded;
++}
++
++bool SdlOpenGLContext::unbind() {
++    bool succeeded = SDL_GL_MakeCurrent(_window, nullptr) == 0;
++
++    if (!succeeded)
++        _state->logSdlError("SDL_GL_MakeCurrent");
++
++    return succeeded;
++}
++
++void SdlOpenGLContext::swapBuffers() {
++    SDL_GL_SwapWindow(_window); // Returns void in SDL2, so there are no errors to report.
++}
++
++void *SdlOpenGLContext::nativeHandle() {
++    return _context;
++}
++
++void *SdlOpenGLContext::getProcAddress(const char *name) {
++    if (SDL_GL_GetCurrentWindow() != _window || SDL_GL_GetCurrentContext() != _context)
++        if (!bind())
++            return nullptr;
++
++    return SDL_GL_GetProcAddress(name);
++}
+diff --git a/src/Library/Platform/Sdl2/SdlOpenGLContext.h b/src/Library/Platform/Sdl2/SdlOpenGLContext.h
+new file mode 100644
+index 0000000..06466aa
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlOpenGLContext.h
+@@ -0,0 +1,24 @@
++#pragma once
++
++#include <SDL.h>
++
++#include "Library/Platform/Interface/PlatformOpenGLContext.h"
++
++class SdlPlatformSharedState;
++
++class SdlOpenGLContext: public PlatformOpenGLContext {
++ public:
++    SdlOpenGLContext(SdlPlatformSharedState *state, SDL_Window *window, SDL_GLContext context);
++    virtual ~SdlOpenGLContext();
++
++    virtual bool bind() override;
++    virtual bool unbind() override;
++    virtual void *nativeHandle() override;
++    virtual void swapBuffers() override;
++    virtual void *getProcAddress(const char *name) override;
++
++ private:
++    SdlPlatformSharedState *_state = nullptr;
++    SDL_Window *_window = nullptr;
++    SDL_GLContext _context = nullptr;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlPlatform.cpp b/src/Library/Platform/Sdl2/SdlPlatform.cpp
+new file mode 100644
+index 0000000..ab141e1
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlPlatform.cpp
+@@ -0,0 +1,165 @@
++#include "SdlPlatform.h"
++
++#include <SDL.h>
++
++#include <memory>
++#include <vector>
++#include <string>
++
++#include "Library/Logger/Logger.h"
++
++#include "SdlPlatformSharedState.h"
++#include "SdlEventLoop.h"
++#include "SdlWindow.h"
++#include "SdlGamepad.h"
++#include "SdlEnumTranslation.h"
++
++static void SDLCALL sdlLogCallback(void *userdata, int category, SDL_LogPriority priority, const char *message) {
++    LogLevel level = translateSdlLogLevel(priority);
++    if (category == SDL_LOG_CATEGORY_ASSERT)
++        level = LOG_CRITICAL; // This is an assertion, damn it! But SDL issues these at SDL_LOG_PRIORITY_WARN.
++
++    MM_LOG_IN(SdlPlatformSharedState::logCategory(), level, "{}", message);
++}
++
++SdlPlatform::SdlPlatform() {
++    _state = std::make_unique<SdlPlatformSharedState>();
++
++    SDL_LogSetOutputFunction(&sdlLogCallback, _state.get());
++
++    // SDL2 reports Nintendo face buttons by their labels by default, SDL3 always uses positions. We want the SDL3
++    // behavior, so that KEY_GAMEPAD_A is always the bottom button.
++    SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0");
++
++    // We're not using SDL2main, see SdlMain.cpp.
++    SDL_SetMainReady();
++
++    _initialized = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0;
++    if (!_initialized) {
++        _state->logSdlError("SDL_Init");
++        return;
++    }
++
++    _state->initializeGamepads();
++}
++
++SdlPlatform::~SdlPlatform() {
++    SDL_Quit(); // Safe to call even if there were errors in initialization.
++    _state.reset(); // Shared state destructor asserts that all windows & event loops are destroyed.
++}
++
++std::unique_ptr<PlatformWindow> SdlPlatform::createWindow() {
++    if (!_initialized)
++        return nullptr;
++
++#if __ANDROID__
++    // TODO(captainurist): SDL orientation code turned out to be buggy and works only before window creation,
++    //                     hardcode only landscape modes there for now.
++    if (!SDL_SetHintWithPriority(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight", SDL_HINT_OVERRIDE))
++        _state->logSdlError("SDL_SetHintWithPriority");
++#endif
++
++    uint32_t flags = SDL_WINDOW_HIDDEN | SDL_WINDOW_OPENGL;
++    SDL_Window *window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 100, 100, flags);
++    if (!window) {
++        // Some minimal SDL2 video drivers (e.g. on consoles) only accept windows that cover the whole display, so we
++        // retry with the desktop display mode size.
++        _state->logSdlError("SDL_CreateWindow", LOG_INFO);
++
++        SDL_DisplayMode mode;
++        if (SDL_GetDesktopDisplayMode(0, &mode) != 0) {
++            _state->logSdlError("SDL_GetDesktopDisplayMode");
++            return nullptr;
++        }
++
++        window = SDL_CreateWindow("", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, mode.w, mode.h, flags);
++        if (!window) {
++            _state->logSdlError("SDL_CreateWindow");
++            return nullptr;
++        }
++    }
++
++    uint32_t id = SDL_GetWindowID(window);
++    if (!id) {
++        _state->logSdlError("SDL_GetWindowID");
++        return nullptr;
++    }
++
++    std::unique_ptr<SdlWindow> result = std::make_unique<SdlWindow>(_state.get(), window, id);
++    _state->registerWindow(result.get());
++    return result;
++}
++
++std::unique_ptr<PlatformEventLoop> SdlPlatform::createEventLoop() {
++    if (!_initialized)
++        return nullptr;
++
++    return std::make_unique<SdlEventLoop>(_state.get());
++}
++
++std::vector<PlatformGamepad *> SdlPlatform::gamepads() {
++    return _state->allGamepads();
++}
++
++void SdlPlatform::setCursorShown(bool cursorShown) {
++    if (!_initialized)
++        return;
++
++    if (SDL_ShowCursor(cursorShown ? SDL_ENABLE : SDL_DISABLE) < 0)
++        _state->logSdlError("SDL_ShowCursor");
++}
++
++bool SdlPlatform::isCursorShown() const {
++    if (!_initialized)
++        return true;
++
++    int result = SDL_ShowCursor(SDL_QUERY);
++    if (result < 0) {
++        _state->logSdlError("SDL_ShowCursor");
++        return true;
++    }
++
++    return result == SDL_ENABLE;
++}
++
++std::vector<Recti> SdlPlatform::displayGeometries() const {
++    if (!_initialized)
++        return {};
++
++    int count = SDL_GetNumVideoDisplays();
++    if (count < 0) {
++        _state->logSdlError("SDL_GetNumVideoDisplays");
++        return {};
++    }
++
++    std::vector<Recti> result;
++
++    SDL_Rect rect;
++    for (int i = 0; i < count; i++) {
++        if (SDL_GetDisplayBounds(i, &rect) != 0) {
++            _state->logSdlError("SDL_GetDisplayBounds");
++            return {};
++        }
++
++        result.emplace_back(rect.x, rect.y, rect.w, rect.h);
++    }
++
++    return result;
++}
++
++void SdlPlatform::showMessageBox(const std::string &title, const std::string &message) const {
++    // No need to check _initialized here. From SDL docs:
++    //     This function may be called at any time, even before SDL_Init()
++    if (SDL_ShowSimpleMessageBox(0, title.c_str(), message.c_str(), nullptr) != 0)
++        _state->logSdlError("SDL_ShowSimpleMessageBox");
++}
++
++int64_t SdlPlatform::tickCount() const {
++    // No need to check _initialized here either.
++    // Looking at implementation in SDL, this function works even w/o a call to SDL_Init.
++    return SDL_GetTicks64();
++}
++
++std::unique_ptr<Platform> Platform::createStandardPlatform() {
++    return std::make_unique<SdlPlatform>();
++}
+diff --git a/src/Library/Platform/Sdl2/SdlPlatform.h b/src/Library/Platform/Sdl2/SdlPlatform.h
+new file mode 100644
+index 0000000..da6bdcc
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlPlatform.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include <vector>
++#include <memory>
++#include <string>
++
++#include "Library/Platform/Interface/Platform.h"
++
++class SdlWindow;
++class SdlGamepad;
++class SdlPlatformSharedState;
++
++class SdlPlatform: public Platform {
++ public:
++    SdlPlatform();
++    virtual ~SdlPlatform();
++
++    virtual std::unique_ptr<PlatformWindow> createWindow() override;
++    virtual std::unique_ptr<PlatformEventLoop> createEventLoop() override;
++
++    virtual std::vector<PlatformGamepad *> gamepads() override;
++
++    virtual void setCursorShown(bool cursorShown) override;
++    virtual bool isCursorShown() const override;
++
++    virtual std::vector<Recti> displayGeometries() const override;
++
++    virtual void showMessageBox(const std::string &title, const std::string &message) const override;
++
++    virtual int64_t tickCount() const override;
++
++ private:
++    bool _initialized = false;
++    std::unique_ptr<SdlPlatformSharedState> _state;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlPlatformSharedState.cpp b/src/Library/Platform/Sdl2/SdlPlatformSharedState.cpp
+new file mode 100644
+index 0000000..33f4a24
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlPlatformSharedState.cpp
+@@ -0,0 +1,129 @@
++#include "SdlPlatformSharedState.h"
++
++#include <cassert>
++#include <memory>
++#include <vector>
++
++#include "Library/Logger/Logger.h"
++
++#include "Utility/MapAccess.h"
++
++#include "SdlWindow.h"
++#include "SdlLogSource.h"
++#include "SdlGamepad.h"
++
++// Log category should be a global so that it's registered at program startup.
++static constinit SdlLogSource globalSdlLogSource;
++static LogCategory globalSdlLogCategory("sdl", &globalSdlLogSource);
++
++SdlPlatformSharedState::SdlPlatformSharedState() = default;
++
++SdlPlatformSharedState::~SdlPlatformSharedState() {
++    assert(_windowById.empty()); // Platform should be destroyed after all windows.
++    assert(_eventLoopCount == 0); // And all event loops!
++}
++
++void SdlPlatformSharedState::logSdlError(const char *sdlFunctionName, LogLevel level) {
++    const char *errorMessage = SDL_GetError();
++    if (!errorMessage || *errorMessage == '\0') // Not sure if SDL_GetError can return nullptr, but it definitely can return an empty string.
++        errorMessage = "No error";
++    MM_LOG_IN(logCategory(), level, "SDL error in {}: {}", sdlFunctionName, errorMessage);
++}
++
++const LogCategory &SdlPlatformSharedState::logCategory() {
++    return globalSdlLogCategory;
++}
++
++void SdlPlatformSharedState::registerWindow(SdlWindow *window) {
++    assert(!_windowById.contains(window->id()));
++    _windowById[window->id()] = window;
++}
++
++void SdlPlatformSharedState::unregisterWindow(SdlWindow *window) {
++    assert(_windowById.contains(window->id()));
++    _windowById.erase(window->id());
++}
++
++std::vector<uint32_t> SdlPlatformSharedState::allWindowIds() const {
++    std::vector<uint32_t> result;
++    for (auto [id, _] : _windowById)
++        result.push_back(id);
++    return result;
++}
++
++SdlWindow *SdlPlatformSharedState::window(uint32_t id) const {
++    assert(_windowById.contains(id));
++    return valueOr(_windowById, id, nullptr);
++}
++
++void SdlPlatformSharedState::registerEventLoop(SdlEventLoop *) {
++    _eventLoopCount++;
++}
++
++void SdlPlatformSharedState::unregisterEventLoop(SdlEventLoop *) {
++    _eventLoopCount--;
++}
++
++void SdlPlatformSharedState::initializeGamepads() {
++    int count = SDL_NumJoysticks();
++    if (count < 0) {
++        logSdlError("SDL_NumJoysticks");
++        return;
++    }
++
++    for (int i = 0; i < count; i++) {
++        if (!SDL_IsGameController(i))
++            continue;
++
++        initializeGamepad(i);
++    }
++}
++
++SdlGamepad *SdlPlatformSharedState::initializeGamepad(int deviceIndex) {
++    assert(SDL_IsGameController(deviceIndex));
++
++    std::unique_ptr<SDL_GameController, void(*)(SDL_GameController *)> gamepad(SDL_GameControllerOpen(deviceIndex), &SDL_GameControllerClose);
++    if (!gamepad) {
++        logSdlError("SDL_GameControllerOpen");
++        return nullptr;
++    }
++
++    SDL_Joystick *joystick = SDL_GameControllerGetJoystick(gamepad.get());
++    if (!joystick) {
++        logSdlError("SDL_GameControllerGetJoystick");
++        return nullptr;
++    }
++
++    // Note that unlike in SDL3, in SDL2 zero is a valid joystick instance id.
++    SDL_JoystickID id = SDL_JoystickInstanceID(joystick);
++    if (id < 0) {
++        logSdlError("SDL_JoystickInstanceID");
++        return nullptr;
++    }
++
++    // TODO(captainurist): The assert below triggers with @pskelton's xbox controller, and it shouldn't trigger.
++    // Figure out why it happens and either fix the bug in our logic, or add a comment here describing what's happening.
++    // assert(!_gamepadById.contains(id));
++    // if (SdlGamepad *result = _gamepadById[id].get())
++    //    return result;
++
++    return _gamepadById.emplace(id, std::make_unique<SdlGamepad>(this, gamepad.release(), id)).first->second.get();
++}
++
++void SdlPlatformSharedState::deinitializeGamepad(SDL_JoystickID id) {
++    assert(_gamepadById.contains(id));
++
++    _gamepadById.erase(id);
++}
++
++std::vector<PlatformGamepad *> SdlPlatformSharedState::allGamepads() const {
++    std::vector<PlatformGamepad *> result;
++    for (const auto &[_, gamepad] : _gamepadById)
++        result.push_back(gamepad.get());
++    return result;
++}
++
++SdlGamepad *SdlPlatformSharedState::gamepad(SDL_JoystickID id) const {
++    auto pos = _gamepadById.find(id);
++    return pos == _gamepadById.end() ? nullptr : pos->second.get();
++}
+diff --git a/src/Library/Platform/Sdl2/SdlPlatformSharedState.h b/src/Library/Platform/Sdl2/SdlPlatformSharedState.h
+new file mode 100644
+index 0000000..ac218cb
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlPlatformSharedState.h
+@@ -0,0 +1,52 @@
++#pragma once
++
++#include <SDL.h>
++
++#include <cstdint>
++#include <vector>
++#include <unordered_map>
++#include <memory>
++
++#include "Library/Logger/LogCategory.h"
++#include "Library/Logger/LogEnums.h"
++
++class SdlWindow;
++class SdlEventLoop;
++class SdlPlatform;
++class SdlGamepad;
++class PlatformEvent;
++class PlatformEventHandler;
++class PlatformGamepad;
++class Logger;
++
++class SdlPlatformSharedState {
++ public:
++    SdlPlatformSharedState();
++    ~SdlPlatformSharedState();
++
++    /**
++     * Logs the last SDL error. Use a level lower than `LOG_ERROR` for optional functionality that minimal SDL2 video
++     * drivers might not implement.
++     */
++    void logSdlError(const char *sdlFunctionName, LogLevel level = LOG_ERROR);
++    static const LogCategory &logCategory();
++
++    void registerWindow(SdlWindow *window);
++    void unregisterWindow(SdlWindow *window);
++    std::vector<uint32_t> allWindowIds() const;
++    SdlWindow *window(uint32_t id) const;
++
++    void registerEventLoop(SdlEventLoop *eventLoop);
++    void unregisterEventLoop(SdlEventLoop *eventLoop);
++
++    void initializeGamepads();
++    SdlGamepad *initializeGamepad(int deviceIndex); // Note: it's device index, not joystick instance id.
++    void deinitializeGamepad(SDL_JoystickID id); // And here it's joystick instance id, which is different from a device index!
++    std::vector<PlatformGamepad *> allGamepads() const;
++    SdlGamepad *gamepad(SDL_JoystickID id) const;
++
++ private:
++    std::unordered_map<uint32_t, SdlWindow *> _windowById;
++    std::unordered_map<SDL_JoystickID, std::unique_ptr<SdlGamepad>> _gamepadById;
++    size_t _eventLoopCount = 0;
++};
+diff --git a/src/Library/Platform/Sdl2/SdlWindow.cpp b/src/Library/Platform/Sdl2/SdlWindow.cpp
+new file mode 100644
+index 0000000..9c2a71d
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlWindow.cpp
+@@ -0,0 +1,225 @@
++#include "SdlWindow.h"
++
++#include <cassert>
++#include <string>
++#include <memory>
++
++#include "Library/Platform/Interface/PlatformEventHandler.h"
++
++#include "Library/Logger/Logger.h"
++
++#include "SdlPlatformSharedState.h"
++#include "SdlEnumTranslation.h"
++#include "SdlOpenGLContext.h"
++
++// Note that a lot of SDL2 window functions return void, unlike their SDL3 counterparts. For these there are no errors
++// to report, and SDL2 silently does nothing if the video driver doesn't support the operation.
++
++SdlWindow::SdlWindow(SdlPlatformSharedState *state, SDL_Window *window, uint32_t id): _state(state), _window(window), _id(id) {
++    assert(state);
++    assert(window);
++    assert(id);
++}
++
++SdlWindow::~SdlWindow() {
++    _state->unregisterWindow(this);
++    SDL_DestroyWindow(_window);
++}
++
++void SdlWindow::setTitle(const std::string &title) {
++    SDL_SetWindowTitle(_window, title.c_str());
++}
++
++std::string SdlWindow::title() const {
++    return SDL_GetWindowTitle(_window);
++}
++
++void SdlWindow::setIcon(RgbaImageView image) {
++    // Note that this doesn't copy the pixel data. Also note that SDL_PIXELFORMAT_RGBA32 is a byte-order format that
++    // matches the memory layout of Color, while SDL_PIXELFORMAT_RGBA8888 is a packed format that doesn't.
++    SDL_Surface *icon = SDL_CreateRGBSurfaceWithFormatFrom(
++        const_cast<Color *>(image.pixels().data()),
++        image.width(),
++        image.height(),
++        32,
++        image.width() * 4,
++        SDL_PIXELFORMAT_RGBA32
++    );
++    if (!icon) {
++        _state->logSdlError("SDL_CreateRGBSurfaceWithFormatFrom");
++        return;
++    }
++
++    SDL_SetWindowIcon(_window, icon);
++    SDL_FreeSurface(icon);
++}
++
++void SdlWindow::resize(const Sizei &size) {
++    SDL_SetWindowSize(_window, size.w, size.h);
++}
++
++Sizei SdlWindow::size() const {
++    Sizei result;
++    SDL_GetWindowSize(_window, &result.w, &result.h);
++    return result;
++}
++
++void SdlWindow::setPosition(const Pointi &pos) {
++    SDL_SetWindowPosition(_window, pos.x, pos.y);
++}
++
++Pointi SdlWindow::position() const {
++    Pointi result;
++    SDL_GetWindowPosition(_window, &result.x, &result.y);
++    return result;
++}
++
++void SdlWindow::setVisible(bool visible) {
++    if (visible) {
++        SDL_ShowWindow(_window);
++    } else {
++        SDL_HideWindow(_window);
++    }
++}
++
++bool SdlWindow::isVisible() const {
++    return SDL_GetWindowFlags(_window) & SDL_WINDOW_SHOWN; // SDL2 maintains both SDL_WINDOW_SHOWN & SDL_WINDOW_HIDDEN.
++}
++
++void SdlWindow::setResizable(bool resizable) {
++    SDL_SetWindowResizable(_window, resizable ? SDL_TRUE : SDL_FALSE);
++}
++
++bool SdlWindow::isResizable() const {
++    return SDL_GetWindowFlags(_window) & SDL_WINDOW_RESIZABLE;
++}
++
++void SdlWindow::setWindowMode(PlatformWindowMode mode) {
++    // WINDOW_MODE_FULLSCREEN_BORDERLESS maps to SDL_WINDOW_FULLSCREEN_DESKTOP. SDL2's exclusive fullscreen mode is not
++    // exposed, same as in SDL3 backend.
++    //
++    // Unlike SDL3, SDL2 ignores SDL_SetWindowBordered calls for fullscreen windows, so we need to leave fullscreen first.
++    if (SDL_SetWindowFullscreen(_window, mode == WINDOW_MODE_FULLSCREEN_BORDERLESS ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0)
++        _state->logSdlError("SDL_SetWindowFullscreen");
++    SDL_SetWindowBordered(_window, mode == WINDOW_MODE_WINDOWED ? SDL_TRUE : SDL_FALSE);
++}
++
++PlatformWindowMode SdlWindow::windowMode() {
++    // Note that we're checking for SDL_WINDOW_FULLSCREEN, and not for SDL_WINDOW_FULLSCREEN_DESKTOP. This way exclusive
++    // fullscreen windows (e.g. if the video driver doesn't support anything else) are reported as fullscreen too.
++    uint32_t flags = SDL_GetWindowFlags(_window);
++    if ((flags & SDL_WINDOW_FULLSCREEN) == SDL_WINDOW_FULLSCREEN)
++        return WINDOW_MODE_FULLSCREEN_BORDERLESS;
++    if ((flags & SDL_WINDOW_BORDERLESS) == SDL_WINDOW_BORDERLESS)
++        return WINDOW_MODE_BORDERLESS;
++    return WINDOW_MODE_WINDOWED;
++}
++
++void SdlWindow::setOrientations(PlatformWindowOrientations orientations) {
++    std::string hints{};
++
++    if (orientations & LANDSCAPE_LEFT)
++        hints += "LandscapeLeft ";
++    if (orientations & LANDSCAPE_RIGHT)
++        hints += "LandscapeRight ";
++    if (orientations & PORTRAIT_UP)
++        hints += "Portrait ";
++    if (orientations & PORTRAIT_DOWN)
++        hints += "PortraitUpsideDown ";
++
++    if (!SDL_SetHintWithPriority(SDL_HINT_ORIENTATIONS, hints.c_str(), SDL_HINT_OVERRIDE))
++        _state->logSdlError("SDL_SetHintWithPriority");
++}
++
++PlatformWindowOrientations SdlWindow::orientations() {
++    PlatformWindowOrientations orientations;
++
++    if (SDL_GetHint("LandscapeLeft"))
++        orientations |= LANDSCAPE_LEFT;
++    if (SDL_GetHint("LandscapeRight"))
++        orientations |= LANDSCAPE_RIGHT;
++    if (SDL_GetHint("Portrait"))
++        orientations |= PORTRAIT_UP;
++    if (SDL_GetHint("PortraitUpsideDown"))
++        orientations |= PORTRAIT_DOWN;
++
++    return orientations;
++}
++
++void SdlWindow::setGrabsMouse(bool grabsMouse) {
++    SDL_SetWindowMouseGrab(_window, grabsMouse ? SDL_TRUE : SDL_FALSE);
++}
++
++bool SdlWindow::grabsMouse() const {
++    return SDL_GetWindowMouseGrab(_window) == SDL_TRUE;
++}
++
++void SdlWindow::setMouseRelative(bool mouseRelative) {
++    // SDL2 doesn't have a per-window relative mouse mode, it applies to the window that has mouse focus. We have only
++    // one window, so this works the same way as SDL_SetWindowRelativeMouseMode in SDL3. Fails if there is no
++    // relative mouse support at all, which is not a problem.
++    if (SDL_SetRelativeMouseMode(mouseRelative ? SDL_TRUE : SDL_FALSE) != 0)
++        _state->logSdlError("SDL_SetRelativeMouseMode", LOG_DEBUG);
++}
++
++bool SdlWindow::isMouseRelative() const {
++    return SDL_GetRelativeMouseMode() == SDL_TRUE;
++}
++
++Marginsi SdlWindow::frameMargins() const {
++    Marginsi result;
++    if (SDL_GetWindowBordersSize(_window, &result.top, &result.left, &result.bottom, &result.right) != 0) {
++        _state->logSdlError("SDL_GetWindowBordersSize", LOG_DEBUG); // Not supported by a lot of video drivers.
++        return Marginsi();
++    }
++    return result;
++}
++
++void *SdlWindow::nativeHandle() const {
++    return _window;
++}
++
++void SdlWindow::activate() {
++    SDL_RaiseWindow(_window);
++}
++
++void SdlWindow::warpMouse(Pointi position) {
++    SDL_WarpMouseInWindow(_window, position.x, position.y);
++}
++
++std::unique_ptr<PlatformOpenGLContext> SdlWindow::createOpenGLContext(const PlatformOpenGLOptions &options) {
++    if (options.versionMajor != -1)
++        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, options.versionMajor);
++
++    if (options.versionMinor != -1)
++        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, options.versionMinor);
++
++    if (options.depthBits != -1)
++        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, options.depthBits);
++
++    if (options.stencilBits != -1)
++        SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, options.stencilBits);
++
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, translatePlatformOpenGLProfile(options.profile));
++    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, options.doubleBuffered);
++
++    SDL_GLContext ctx = SDL_GL_CreateContext(_window);
++    if (!ctx) {
++        _state->logSdlError("SDL_GL_CreateContext");
++        return nullptr;
++    }
++
++    int vsyncValue = translatePlatformVSyncMode(options.vsyncMode);
++
++    bool success = SDL_GL_SetSwapInterval(vsyncValue) == 0;
++    if (!success && options.vsyncMode == GL_VSYNC_ADAPTIVE) {
++        // Adaptive vsync is not supported everywhere, e.g. some console SDL2 ports accept only 0 and 1.
++        MM_INFO_IN(SdlPlatformSharedState::logCategory(), "Adaptive vsync is not supported ({}), falling back to normal vsync.", SDL_GetError());
++        success = SDL_GL_SetSwapInterval(translatePlatformVSyncMode(GL_VSYNC_NORMAL)) == 0; // Retry with normal vsync.
++    }
++
++    if (!success)
++        _state->logSdlError("SDL_GL_SetSwapInterval"); // Not a critical error, we still return context in this case.
++
++    return std::make_unique<SdlOpenGLContext>(_state, _window, ctx);
++}
+diff --git a/src/Library/Platform/Sdl2/SdlWindow.h b/src/Library/Platform/Sdl2/SdlWindow.h
+new file mode 100644
+index 0000000..a9c2ae7
+--- /dev/null
++++ b/src/Library/Platform/Sdl2/SdlWindow.h
+@@ -0,0 +1,65 @@
++#pragma once
++
++#include <SDL.h>
++
++#include <memory>
++#include <string>
++
++#include "Library/Platform/Interface/PlatformWindow.h"
++
++class SdlPlatformSharedState;
++class PlatformEventHandler;
++
++class SdlWindow : public PlatformWindow {
++ public:
++    SdlWindow(SdlPlatformSharedState *state, SDL_Window *window, uint32_t id);
++    virtual ~SdlWindow();
++
++    virtual void setTitle(const std::string &title) override;
++    virtual std::string title() const override;
++
++    virtual void setIcon(RgbaImageView image) override;
++
++    virtual void resize(const Sizei &size) override;
++    virtual Sizei size() const override;
++
++    virtual void setPosition(const Pointi &pos) override;
++    virtual Pointi position() const override;
++
++    virtual void setVisible(bool visible) override;
++    virtual bool isVisible() const override;
++
++    virtual void setResizable(bool resizable) override;
++    virtual bool isResizable() const override;
++
++    virtual void setWindowMode(PlatformWindowMode mode) override;
++    virtual PlatformWindowMode windowMode() override;
++
++    virtual void setOrientations(PlatformWindowOrientations orientations) override;
++    virtual PlatformWindowOrientations orientations() override;
++
++    virtual void setGrabsMouse(bool grabsMouse) override;
++    virtual bool grabsMouse() const override;
++
++    virtual void setMouseRelative(bool mouseRelative) override;
++    virtual bool isMouseRelative() const override;
++
++    virtual Marginsi frameMargins() const override;
++
++    virtual void *nativeHandle() const override;
++
++    virtual void activate() override;
++
++    virtual void warpMouse(Pointi position) override;
++
++    virtual std::unique_ptr<PlatformOpenGLContext> createOpenGLContext(const PlatformOpenGLOptions &options) override;
++
++    uint32_t id() const {
++        return _id;
++    }
++
++ private:
++    SdlPlatformSharedState *_state = nullptr;
++    SDL_Window *_window = nullptr;
++    uint32_t _id = 0; // SDL window id, see SDL_GetWindowID.
++};
+diff --git a/thirdparty/imgui/CMakeLists.txt b/thirdparty/imgui/CMakeLists.txt
+index 945cc45..9827855 100644
+--- a/thirdparty/imgui/CMakeLists.txt
++++ b/thirdparty/imgui/CMakeLists.txt
+@@ -12,19 +12,29 @@ endfunction()
+ 
+ copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.h ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.h)
+ copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.cpp ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.cpp)
+-copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.h ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.h)
+-copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.cpp ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.cpp)
++
++# SDL backend should match the platform backend, see src/Library/Platform/CMakeLists.txt.
++if(OE_USE_SDL2)
++    set(IMGUI_SDL_BACKEND imgui_impl_sdl2)
++    set(IMGUI_SDL_TARGET SDL2::SDL2OE)
++else()
++    set(IMGUI_SDL_BACKEND imgui_impl_sdl3)
++    set(IMGUI_SDL_TARGET SDL3::SDL3)
++endif()
++
++copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.h ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.h)
++copy_and_patch_imgui_file(${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.cpp ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.cpp)
+ 
+ set(IMGUI_BACKENDS_SOURCES
+     ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.cpp
+-    ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.cpp)
++    ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.cpp)
+ 
+ set(IMGUI_BACKENDS_HEADERS
+     ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_opengl3.h
+-    ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/imgui_impl_sdl3.h)
++    ${IMGUI_BACKENDS_SOURCE_DIR}/imgui/backends/${IMGUI_SDL_BACKEND}.h)
+ 
+ add_library(imgui_backends STATIC ${IMGUI_BACKENDS_SOURCES} ${IMGUI_BACKENDS_HEADERS})
+-target_link_libraries(imgui_backends PRIVATE SDL3::SDL3 glad)
++target_link_libraries(imgui_backends PRIVATE ${IMGUI_SDL_TARGET} glad)
+ target_include_directories(imgui_backends PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends)
+ 
+ set(IMGUI_SOURCES

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stand-in linker for CMake: records the link inputs of an executable target and writes a placeholder,
+# because PS5 titles are linked and signed by the native app template, not by CMake.
+# Usage: ps5-capture-link <output> <link inputs...>
+output=$1
+shift
+printf '%s\n' "$@" > "$output.link-inputs"
+printf 'placeholder: link inputs are in %s.link-inputs\n' "$output" > "$output"

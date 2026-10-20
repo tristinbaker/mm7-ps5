@@ -1,0 +1,11 @@
+# Fetched and built by scripts/setup.sh
+/deps/
+# Build output and release zips
+/build/
+# Kernel logs from scripts/klog.sh (they can contain your PSN name)
+/logs/
+# Per-machine settings, see config.example.sh
+/config.local.sh
+
+__pycache__/
+*.pyc

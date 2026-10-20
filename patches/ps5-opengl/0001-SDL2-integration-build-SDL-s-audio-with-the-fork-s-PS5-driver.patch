@@ -1,0 +1,51 @@
+From ec06d8c2da0359e274e409046f0a9586965e4010 Mon Sep 17 00:00:00 2001
+From: Mihawk <163614687+mihawk-99@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 23:17:14 -0400
+Subject: [PATCH] SDL2 integration: build SDL's audio with the fork's PS5
+ driver
+
+The integration forced SDL_AUDIO off, so a consumer opened no audio
+device. PS5_RetroArch's EmulationStation logged "Failed to create sample
+conversion stream: Parameter 'dst_channels' is invalid" and played
+nothing. The pinned fork (ps5-payload-dev/SDL 8c56053) has a PS5 driver,
+src/audio/ps5: sceAudioOut on the main port for the system user, at
+48 kHz, S16 or F32. That is how PS5_RetroArch opens its own output. SDL's
+CMake builds the driver whenever SDL_AUDIO is on for PS5, so the
+integration now turns audio on for native builds; the host test keeps it
+off.
+
+Checked on the base PS5 (13.40), with PS5_RetroArch's EmulationStation
+built against this build (integration/SDL2/build.py native, payload SDK
+f05c5de):
+  ES-DE's log: "Audio driver: ps5", "Detected playback device: System
+    audio output device"; the conversion-stream errors are gone
+  SDL_GetAudioDeviceStatus: ES-DE's device was playing while it browsed
+    with its navigation sounds
+---
+ integration/SDL2/CMakeLists.txt | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/integration/SDL2/CMakeLists.txt b/integration/SDL2/CMakeLists.txt
+index d12228bf..3927b4d1 100644
+--- a/integration/SDL2/CMakeLists.txt
++++ b/integration/SDL2/CMakeLists.txt
+@@ -18,10 +18,18 @@ set(SDL_HIDAPI_JOYSTICK OFF CACHE BOOL "" FORCE)
+ set(SDL_PTHREADS ON CACHE BOOL "" FORCE)
+ set(SDL_SOURCE_VERSION "2.30.12-g8c56053f13ca-g26")
+ set(SDL2_DISABLE_SDL2MAIN ON CACHE BOOL "" FORCE)
+-foreach(feature AUDIO RENDER HAPTIC SENSOR OPENGL OPENGLES VULKAN X11
++foreach(feature RENDER HAPTIC SENSOR OPENGL OPENGLES VULKAN X11
+                 WAYLAND KMSDRM OFFSCREEN JACK PULSEAUDIO DBUS IBUS FCITX LIBUDEV)
+     set(SDL_${feature} OFF CACHE BOOL "" FORCE)
+ endforeach()
++# Sound: the pinned fork's PS5 driver (src/audio/ps5), sceAudioOut on the main port
++# at 48 kHz, as the console's other titles open it; the host test keeps it off.
++# Without it a consumer (EmulationStation) opened no device and played nothing.
++if(G19_HOST_TEST)
++    set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
++else()
++    set(SDL_AUDIO ON CACHE BOOL "" FORCE)
++endif()
+ if(G19_HOST_TEST)
+     add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g)
+     add_link_options(-fsanitize=address,undefined)
