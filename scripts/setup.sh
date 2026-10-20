@@ -95,7 +95,9 @@ if ! step_done ps5-opengl "$gl_pin"; then
         git -C "$gl" apply "$patch"
     done
     (cd "$gl" && python3 tools/fetch-sources.py)
-    rm -rf "$gl/build/sdk" "$gl/build/sdl2-native"
+    # Meson build directories remember absolute paths (SDK cross file), so never reuse an old one. The SDL2
+    # build lives in there too, so its step has to run again.
+    rm -rf "$gl/build" "$stamps/sdl2"
     MAKEFLAGS=-j$jobs make -C "$gl" --no-print-directory sdk-gl46 > "$MM_PS5_DEPS/ps5-opengl-build.log" 2>&1 ||
         { tail -30 "$MM_PS5_DEPS/ps5-opengl-build.log"; echo "ps5-opengl build failed, see deps/ps5-opengl-build.log" >&2; exit 1; }
     mark_done ps5-opengl "$gl_pin"
