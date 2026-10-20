@@ -7,7 +7,6 @@ build.py applies its own static and joystick patches to an archive of the pinned
 SDL checkout never reach the build. --extra-patch applies more patches after those; they are copied into the
 integration snapshot, so the receipt covers them like the integration's own inputs.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  integration/SDL2/build.py | 10 ++++++++++
  1 file changed, 10 insertions(+)

@@ -8,8 +8,6 @@ listened to keyboard events. Continuously triggered actions bound to the gamepad
 therefore never fired, and the sticks did nothing. Gamepad buttons are now tracked like keys, and each stick or
 trigger direction is down while past the same 0.5 threshold GameWindowHandler uses. Both directions of an axis
 are updated on every event, so a stick crossing to the other side in one event can't leave a key held.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Io/KeyboardController.cpp | 68 +++++++++++++++++++++++++++++++----
  src/Io/KeyboardController.h   |  7 ++++

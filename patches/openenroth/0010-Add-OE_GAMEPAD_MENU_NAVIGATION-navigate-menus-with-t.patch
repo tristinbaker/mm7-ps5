@@ -15,8 +15,6 @@ own keyboard navigation works (party creation, NPC and house dialogues) keep it:
 buttons, and taking over the d-pad and the select button there left no way to change stats or press OK.
 
 The touchpad mouse no longer hides its cursor in menus, it shows where the navigation is.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeLists.txt                        |   5 +
  src/Application/GameWindowHandler.cpp |  88 ++++++++++++++++++

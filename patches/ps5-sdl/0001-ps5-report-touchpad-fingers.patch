@@ -10,7 +10,6 @@ read before the buttons, so that a touchpad press arrives after the fingers it w
 
 Applies on top of ps5-opengl's integration/SDL2/ps5-joystick.patch.
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/joystick/ps5/SDL_ps5joystick.c | 53 ++++++++++++++++++++++++++++++
  src/joystick/ps5/SDL_ps5joystick.h |  4 +++

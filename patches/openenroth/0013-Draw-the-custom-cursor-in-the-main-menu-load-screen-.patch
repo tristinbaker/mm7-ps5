@@ -10,8 +10,6 @@ touchpad nor the d-pad menu navigation could be followed there.
 
 Mouse look now only comes back when the game's own interface is the one window, as the comment says, not with any
 single window such as the main menu.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Application/Game.cpp       | 5 +++++
  src/GUI/UI/UIPartyCreation.cpp | 3 +++

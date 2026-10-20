@@ -12,8 +12,6 @@ don't drag it off their target. SdlWindow::warpMouse and real mouse motion move 
 The game then always draws the arrow cursor itself and hides it after 3 seconds without mouse movement, and keeps
 the pointer inside the letterboxed picture. The custom arrow is now drawn with its tip, not its centre, at the
 pointer, which also fixes always_custom_cursor.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeLists.txt                                |   5 +
  src/Application/GameWindowHandler.cpp         |  13 +-

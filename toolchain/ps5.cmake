@@ -39,7 +39,10 @@ set(CMAKE_RANLIB "${LLVM21}/bin/llvm-ranlib")
 # with both, and OpenEnroth needs both. C code gets unwind tables so exceptions can pass through C frames
 # (LuaJIT and SDL callbacks).
 set(CMAKE_C_FLAGS_INIT "-D__PROSPERO__ -fPIC -ffunction-sections -fdata-sections -funwind-tables")
-set(CMAKE_CXX_FLAGS_INIT "-D__PROSPERO__ -fPIC -ffunction-sections -fdata-sections -fexceptions -fcxx-exceptions -frtti")
+# FMT_USE_FALLBACK_FILE: fmt::print(FILE *) otherwise writes into the FILE's buffer through FreeBSD's struct layout,
+# and the console's stderr has no usable buffer (it crashed printing an error). The fallback goes through fwrite,
+# which platform/ps5_console.c sends to the kernel log.
+set(CMAKE_CXX_FLAGS_INIT "-D__PROSPERO__ -DFMT_USE_FALLBACK_FILE=1 -fPIC -ffunction-sections -fdata-sections -fexceptions -fcxx-exceptions -frtti")
 
 set(CMAKE_C_LINK_EXECUTABLE "${CMAKE_CURRENT_LIST_DIR}/bin/ps5-capture-link <TARGET> <OBJECTS> <LINK_LIBRARIES>")
 set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CURRENT_LIST_DIR}/bin/ps5-capture-link <TARGET> <OBJECTS> <LINK_LIBRARIES>")

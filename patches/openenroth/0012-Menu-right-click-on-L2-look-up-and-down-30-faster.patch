@@ -7,8 +7,6 @@ Right-click in menus (item info) moves from Square to L2, as asked: the trigger 
 threshold, and a click's whole press is kept from the game. Square goes back to the menus' own hotkeys.
 
 Smooth vertical look moves at 65% of the turn speed instead of half, which was too slow on a stick.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Application/GameConfig.h          |  2 +-
  src/Application/GameWindowHandler.cpp | 19 +++++++++++++++++--

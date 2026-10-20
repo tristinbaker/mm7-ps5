@@ -7,8 +7,6 @@ Subject: [PATCH] Add OE_GL33 option to run the OpenGL renderer on a 3.3 core
 Requests a 3.3 core context and compiles shaders as GLSL 330, which is all the renderer needs.
 glClearDepthf is OpenGL 4.1 / ES only, so desktop GL now clears depth with glClearDepth.
 Verified on Mesa llvmpipe capped at exactly 3.3 (main menu, a dungeon, outdoors).
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeLists.txt                                |  5 ++++
  .../Graphics/Renderer/OpenGLRenderer.cpp      | 23 +++++++++++++++----

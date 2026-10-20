@@ -7,8 +7,6 @@ Detected when the PS5 toolchain file sets PS5. Like Android it builds without cp
 OE_NO_CPPTRACE), takes OpenGL from the static ps5-opengl SDK and static dependencies from the toolchain,
 links a LuaJIT supplied by the toolchain, and gives ImGui's OpenGL backend the functions glad resolved,
 since a native title can't dlopen libGL.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeModules/Dependencies.cmake              | 11 +++++++++++
  CMakeModules/Detection.cmake                 |  5 ++++-

@@ -5,8 +5,6 @@ Subject: [PATCH] Start a new save's name with the current location
 
 Saving into a new slot asks for a name and won't save without one, which needs a keyboard. Start the name with
 the location's name instead, so pressing Save again saves; the name can still be edited first.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Application/GameMenu.cpp |  2 +-
  src/GUI/UI/UISaveLoad.cpp    | 21 +++++++++++++++------

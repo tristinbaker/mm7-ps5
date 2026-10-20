@@ -7,8 +7,6 @@ src/Library/Platform/Sdl2 implements the platform interface against SDL 2.30 for
 have SDL2, such as the PS5 homebrew SDK. It is a port of the SDL3 backend, which stays the default and is
 unchanged. ImGui uses its SDL2 backend in that configuration. Adaptive vsync falls back to normal vsync
 when the driver rejects it.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeLists.txt                                |   5 +
  CMakeModules/Dependencies.cmake               |  32 +-

@@ -7,8 +7,6 @@ Subject: [PATCH] Add a smooth mode for looking up and down:
 Looking up and down moves the view in steps of vertical_turn_speed, repeated with the keyboard's repeat delay.
 That's how the original game works, but with a gamepad stick it's jerky. With 0, like turn_speed's smooth mode,
 the look actions trigger every frame while held and move the view at half the turn speed.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Application/GameConfig.h    | 6 ++++--
  src/Engine/Graphics/Indoor.cpp  | 7 +++++--

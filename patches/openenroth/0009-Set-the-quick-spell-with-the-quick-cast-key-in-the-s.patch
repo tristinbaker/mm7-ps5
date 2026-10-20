@@ -5,8 +5,6 @@ Subject: [PATCH] Set the quick spell with the quick cast key in the spellbook
 
 The spellbook's quick spell button had no key, so a gamepad couldn't reach it. The quick cast key does nothing in
 the spellbook otherwise, and pressing it there now makes the selected spell the one it casts.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/GUI/UI/UISpellbook.cpp | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)

@@ -11,8 +11,6 @@ Shop screens click through one big UIMSG_HouseScreenClick button, so the navigat
 collect where clicks do something while they draw (GUIWindow_House::screenClickTargets): the wares in weapon,
 armor, magic and alchemy shops and guilds, and the inventory cells when selling, identifying and repairing.
 inventoryCellCenters (ItemGrid) is shared with the character inventory and chests.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  src/Application/GameWindowHandler.cpp | 37 +++++++-------
  src/GUI/GUIWindow.cpp                 |  4 ++

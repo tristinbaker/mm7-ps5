@@ -8,8 +8,6 @@ flushAndScale scales the render target to the window with glBlitFramebuffer. The
 only blits on the GPU between matching formats, so there it read the 640x480 target back and scaled it on the
 CPU every frame, which held the game at about 10 fps. With the option on, the target is drawn as a fullscreen
 quad instead, which stays on the GPU everywhere. The GL state is left as the blit path leaves it.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  CMakeLists.txt                                |  5 +++
  resources/CMakeLists.txt                      |  2 +
