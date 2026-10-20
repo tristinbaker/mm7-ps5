@@ -9,21 +9,24 @@ inventory and chest cells, equipped items on the paper doll (HitMap::visiblePoin
 clicks there and Square right-clicks, but only over something to click, so the menus' own gamepad hotkeys keep
 working elsewhere. Menus are the windows open above the game's interface, or all of them in the main menu.
 
-Most menus have no keyboard navigation, and the ones that do show no selection and lose it to the mouse every
-frame, so with a gamepad there was no way through the inventory or the game menu without a mouse. The touchpad
-mouse no longer hides its cursor in menus, it shows where the navigation is.
+Most menus have no keyboard navigation, and the game menu's and spellbook's show no selection or can't move
+freely, so with a gamepad there was no way through the inventory or the game menu without a mouse. Windows whose
+own keyboard navigation works (party creation, NPC and house dialogues) keep it: party creation's columns are big
+buttons, and taking over the d-pad and the select button there left no way to change stats or press OK.
+
+The touchpad mouse no longer hides its cursor in menus, it shows where the navigation is.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- CMakeLists.txt                        |   5 ++
- src/Application/GameWindowHandler.cpp |  88 +++++++++++++++++++
+ CMakeLists.txt                        |   5 +
+ src/Application/GameWindowHandler.cpp |  88 ++++++++++++++++++
  src/Application/GameWindowHandler.h   |  12 +++
  src/Engine/HitMap.h                   |  37 ++++++++
  src/Io/CMakeLists.txt                 |   2 +
- src/Io/MenuNavigation.cpp             | 117 ++++++++++++++++++++++++++
- src/Io/MenuNavigation.h               |  35 ++++++++
+ src/Io/MenuNavigation.cpp             | 128 ++++++++++++++++++++++++++
+ src/Io/MenuNavigation.h               |  35 +++++++
  src/Io/Mouse.cpp                      |   6 +-
- 8 files changed, 301 insertions(+), 1 deletion(-)
+ 8 files changed, 312 insertions(+), 1 deletion(-)
  create mode 100644 src/Io/MenuNavigation.cpp
  create mode 100644 src/Io/MenuNavigation.h
 
@@ -277,10 +280,10 @@ index 80c126c..ad7cc9e 100644
  add_library(io STATIC ${IO_SOURCES} ${IO_HEADERS})
 diff --git a/src/Io/MenuNavigation.cpp b/src/Io/MenuNavigation.cpp
 new file mode 100644
-index 0000000..6e031ea
+index 0000000..510c98b
 --- /dev/null
 +++ b/src/Io/MenuNavigation.cpp
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,128 @@
 +#include "MenuNavigation.h"
 +
 +#include <cstdlib>
@@ -303,7 +306,16 @@ index 0000000..6e031ea
 +static constexpr Pointi CHARACTER_INVENTORY_TOP_LEFT = {14, 17};
 +static constexpr Sizei CHARACTER_INVENTORY_SIZE = {14, 9};
 +
-+// Windows the menu navigation works in, topmost first.
++// Whether the window's own keyboard navigation (GUIWindow::setKeyboardControlGroup) works with a gamepad: it shows
++// what's selected, and the dialog select binding isn't also one of the window's hotkeys. Then the menu navigation
++// stays out of the way - party creation, NPC and house dialogues. The game menu shows no selection and loses it to
++// the mouse, and the spellbook can only step down its list.
++static bool hasOwnNavigation(const GUIWindow *window) {
++    return window->receives_keyboard_input && window->pNumPresenceButton > 0 &&
++           window->eWindowType != WINDOW_GAME_MENU && window->eWindowType != WINDOW_SPELL_BOOK;
++}
++
++// Windows the menu navigation works in, topmost first. Empty if there are none, or one of them navigates itself.
 +static std::vector<GUIWindow *> menuWindows() {
 +    if (pGUIWindow_CastTargetedSpell)
 +        return {pGUIWindow_CastTargetedSpell.get()}; // Like clicks, see Io::Mouse::UI_OnMouseLeftClick.
@@ -313,6 +325,8 @@ index 0000000..6e031ea
 +    for (GUIWindow *window : lWindowList) {
 +        if (window == pPrimaryWindow.get())
 +            break; // The game's own interface isn't a menu.
++        if (hasOwnNavigation(window))
++            return {};
 +        result.push_back(window);
 +        if (window->frameRect == screen)
 +            break; // Covers everything below.
@@ -400,7 +414,7 @@ index 0000000..6e031ea
 +}
 diff --git a/src/Io/MenuNavigation.h b/src/Io/MenuNavigation.h
 new file mode 100644
-index 0000000..5e5e5f1
+index 0000000..36f3d58
 --- /dev/null
 +++ b/src/Io/MenuNavigation.h
 @@ -0,0 +1,35 @@
@@ -413,8 +427,8 @@ index 0000000..5e5e5f1
 +
 +// Gamepad navigation in menus with the mouse cursor (OE_GAMEPAD_MENU_NAVIGATION): the d-pad moves the cursor to the
 +// nearest thing to click in its direction, and a gamepad button clicks where the cursor is. Menus are the windows open
-+// over the game's own interface, or all windows when there is none (the main menu). Positions are in render
-+// coordinates.
++// over the game's own interface, or all windows when there is none (the main menu), except that menus with a working
++// keyboard navigation of their own (party creation, dialogues) keep it. Positions are in render coordinates.
 +namespace Io {
 +
 +/**

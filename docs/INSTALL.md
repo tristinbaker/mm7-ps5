@@ -68,6 +68,10 @@ button, inventory cell or equipped item in that direction, and Cross clicks it. 
 Cross and Square do their menu shortcuts instead (for example Cross starts a new game in the game menu). Items on shop
 shelves can't be reached with the D-pad yet; use the touchpad for those.
 
+Character creation, conversations and the menus inside buildings keep their own D-pad controls: the D-pad moves the
+highlight and Cross picks it. In character creation, L1 and R1 lower and raise the highlighted stat, Triangle
+clears and Cross finishes.
+
 To **set the quick spell**, open the spellbook (L1), move to a spell, press Cross to select it, and press R1. R1 then
 casts it in the game. Pressing Cross again on the selected spell casts it straight away.
 
