@@ -1,0 +1,183 @@
+From 12f3a71422c31fcb7c342cbdc483da2d97d1ce8c Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 13:52:43 -0400
+Subject: [PATCH] Add OE_PRESENT_WITH_DRAW: present the scaled frame with a
+ textured quad
+
+flushAndScale scales the render target to the window with glBlitFramebuffer. The PS5 homebrew OpenGL driver
+only blits on the GPU between matching formats, so there it read the 640x480 target back and scaled it on the
+CPU every frame, which held the game at about 10 fps. With the option on, the target is drawn as a fullscreen
+quad instead, which stays on the GPU everywhere. The GL state is left as the blit path leaves it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |  5 +++
+ resources/CMakeLists.txt                      |  2 +
+ resources/shaders/glpresent.frag              | 11 +++++
+ resources/shaders/glpresent.vert              |  9 ++++
+ .../Graphics/Renderer/OpenGLRenderer.cpp      | 45 ++++++++++++++++++-
+ src/Engine/Graphics/Renderer/OpenGLRenderer.h |  5 +++
+ 6 files changed, 76 insertions(+), 1 deletion(-)
+ create mode 100644 resources/shaders/glpresent.frag
+ create mode 100644 resources/shaders/glpresent.vert
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 59e26fd..326e3b6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -42,6 +42,7 @@ set(OE_DISTRIBUTION_BUILD OFF CACHE BOOL "Specify that this is a build for distr
+ set(OE_USE_SANITIZERS "" CACHE STRING "Sanitizers to build with, passed on to -fsanitize=. Empty string disables sanitizers.")
+ set(OE_GL33 OFF CACHE BOOL "Request an OpenGL 3.3 core context and GLSL 330 shaders instead of OpenGL 4.1.")
+ set(OE_USE_SDL2 OFF CACHE BOOL "Use SDL2 platform backend instead of SDL3, for platforms where only SDL2 is available.")
++set(OE_PRESENT_WITH_DRAW OFF CACHE BOOL "Present the scaled frame by drawing a quad instead of glBlitFramebuffer, for drivers that blit on the CPU.")
+ 
+ if(OE_DISTRIBUTION_BUILD)
+     add_compile_definitions(OE_DISTRIBUTION_BUILD)
+@@ -51,6 +52,10 @@ if(OE_GL33)
+     add_compile_definitions(OE_GL33)
+ endif()
+ 
++if(OE_PRESENT_WITH_DRAW)
++    add_compile_definitions(OE_PRESENT_WITH_DRAW)
++endif()
++
+ if(OE_USE_SDL2)
+     add_compile_definitions(OE_USE_SDL2) # Selects ImGui SDL2 backend in the code that calls into it directly.
+ endif()
+diff --git a/resources/CMakeLists.txt b/resources/CMakeLists.txt
+index 7ffeac1..905844d 100644
+--- a/resources/CMakeLists.txt
++++ b/resources/CMakeLists.txt
+@@ -54,6 +54,8 @@ set(RESOURCE_SOURCES
+         shaders/gllinesshader.vert
+         shaders/gloutbuild.frag
+         shaders/gloutbuild.vert
++        shaders/glpresent.frag
++        shaders/glpresent.vert
+         shaders/glterrain.frag
+         shaders/glterrain.vert
+         shaders/gltextshader.frag
+diff --git a/resources/shaders/glpresent.frag b/resources/shaders/glpresent.frag
+new file mode 100644
+index 0000000..6094bc7
+--- /dev/null
++++ b/resources/shaders/glpresent.frag
+@@ -0,0 +1,11 @@
++#include "precision.glsl"
++
++in vec2 texuv;
++
++out vec4 FragColour;
++
++uniform sampler2D texture0;
++
++void main() {
++    FragColour = vec4(texture(texture0, texuv).rgb, 1.0);
++}
+diff --git a/resources/shaders/glpresent.vert b/resources/shaders/glpresent.vert
+new file mode 100644
+index 0000000..3b40587
+--- /dev/null
++++ b/resources/shaders/glpresent.vert
+@@ -0,0 +1,9 @@
++// Fullscreen quad for presenting the render target, drawn as a 4-vertex triangle strip without vertex buffers.
++
++out vec2 texuv;
++
++void main() {
++    vec2 position = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;
++    texuv = position * 0.5 + 0.5;
++    gl_Position = vec4(position, 0.0, 1.0);
++}
+diff --git a/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp b/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
+index dc73d16..2425272 100644
+--- a/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
++++ b/src/Engine/Graphics/Renderer/OpenGLRenderer.cpp
+@@ -2225,12 +2225,54 @@ void OpenGLRenderer::flushAndScale() {
+         rect.h = h;
+ 
+         GLenum filter = config->graphics.RenderFilter.value() == 1 ? GL_LINEAR : GL_NEAREST;
++#ifdef OE_PRESENT_WITH_DRAW
++        _presentWithDraw(rect, filter);
++#else
+         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+         glBlitFramebuffer(0, 0, outputRender.w, outputRender.h, rect.x, rect.y, rect.w + rect.x, rect.h + rect.y, GL_COLOR_BUFFER_BIT, filter);
+         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
++#endif
+     }
+ }
+ 
++// Scales the render target into rect of the default framebuffer by drawing it as a textured quad. Some drivers only
++// blit on the CPU when the source and destination formats differ (the PS5's does, and then reads the render target
++// back every frame), while a draw always stays on the GPU. Leaves the GL state the way the blit path does.
++void OpenGLRenderer::_presentWithDraw(const Recti &rect, GLenum filter) {
++    GLint previousTexture = 0;
++    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
++    GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
++    GLboolean blend = glIsEnabled(GL_BLEND);
++    GLboolean cullFace = glIsEnabled(GL_CULL_FACE);
++    glDisable(GL_DEPTH_TEST);
++    glDisable(GL_BLEND);
++    glDisable(GL_CULL_FACE);
++
++    glViewport(rect.x, rect.y, rect.w, rect.h);
++    glActiveTexture(GL_TEXTURE0);
++    glBindTexture(GL_TEXTURE_2D, framebufferTextures[0]);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
++
++    if (!_presentVao)
++        glGenVertexArrays(1, &_presentVao);
++    presentshader.use();
++    glUniform1i(presentshader.uniformLocation("texture0"), 0);
++    glBindVertexArray(_presentVao);
++    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++    glBindVertexArray(0);
++    presentshader.unuse();
++
++    glBindTexture(GL_TEXTURE_2D, previousTexture);
++    glViewport(0, 0, outputPresent.w, outputPresent.h);
++    if (depthTest)
++        glEnable(GL_DEPTH_TEST);
++    if (blend)
++        glEnable(GL_BLEND);
++    if (cullFace)
++        glEnable(GL_CULL_FACE);
++}
++
+ void OpenGLRenderer::swapBuffers() {
+     if (outputRender != outputPresent) {
+         glEnable(GL_SCISSOR_TEST);
+@@ -3573,7 +3615,8 @@ bool OpenGLRenderer::ReloadShaders() {
+         {&twodshader,       "gltwodshader",     "2D"},
+         {&billbshader,      "glbillbshader",    "Billboards"},
+         {&decalshader,      "gldecalshader",    "Decals"},
+-        {&forcepershader,   "glforcepershader", "Forced perspective"}
++        {&forcepershader,   "glforcepershader", "Forced perspective"},
++        {&presentshader,    "glpresent",        "Present"}
+     };
+ 
+     SubFileSystem shadersFs("shaders", dfs);
+diff --git a/src/Engine/Graphics/Renderer/OpenGLRenderer.h b/src/Engine/Graphics/Renderer/OpenGLRenderer.h
+index ba6bcdc..28daf2c 100644
+--- a/src/Engine/Graphics/Renderer/OpenGLRenderer.h
++++ b/src/Engine/Graphics/Renderer/OpenGLRenderer.h
+@@ -112,6 +112,7 @@ class OpenGLRenderer : public BaseRenderer {
+     void _initImGui();
+     void _shutdownImGui();
+     void _initWaterTiles();
++    void _presentWithDraw(const Recti &rect, GLenum filter);
+ 
+     FrameLimiter _frameLimiter;
+ 
+@@ -142,6 +143,10 @@ class OpenGLRenderer : public BaseRenderer {
+     OpenGLShader billbshader;
+     OpenGLShader decalshader;
+     OpenGLShader forcepershader;
++    OpenGLShader presentshader;
++
++    // present shader, draws a fullscreen quad without vertex buffers
++    GLuint _presentVao{};
+ 
+     // terrain shader
+     OpenGLVertexBuffer<ShaderVertex> _terrainBuffer;
