@@ -115,12 +115,30 @@ done
     printf ')\n'
 } > "$out/vendor/libopenenroth.a"
 
-(
-    cd "$out"
-    export PS5_PAYLOAD_SDK="$sdk" APP_STATIC_ARCHIVES=vendor/libopenenroth.a
-    export APP_DEFINITIONS= APP_INCLUDE_PATHS= PACBREW_PACKAGES= PACBREW_INCLUDE_PATHS= PACBREW_STATIC_ARCHIVES= APP_RUNTIME_MODULES=
-    bash tools/build.sh Folder
-)
+# The startup report of null imports (scripts/make-import-report.py) needs the imports of the linked title, so
+# it's made from the previous link's list, and the title is linked again if the list changed.
+import_list=$MM_PS5_BUILD/imports.txt
+[[ -f $import_list ]] || : > "$import_list"
+link_title() {
+    python3 "$MM_PS5_ROOT/scripts/make-import-report.py" "$import_list" "$out/src/ps5_import_report.c" > /dev/null
+    (
+        cd "$out"
+        export PS5_PAYLOAD_SDK="$sdk" APP_STATIC_ARCHIVES=vendor/libopenenroth.a
+        export APP_DEFINITIONS= APP_INCLUDE_PATHS= PACBREW_PACKAGES= PACBREW_INCLUDE_PATHS= PACBREW_STATIC_ARCHIVES= APP_RUNTIME_MODULES=
+        bash tools/build.sh Folder
+    )
+}
+link_title
+"$LLVM21/bin/llvm-readelf" --dyn-syms "$out/build/llvm-pie.elf" |
+    awk '$7 == "UND" && $8 != "" {sub(/@.*/, "", $8); print $8}' | sort -u > "$import_list.new"
+if ! cmp -s "$import_list" "$import_list.new"; then
+    mv "$import_list.new" "$import_list"
+    echo "Imports changed, linking again for the startup import report"
+    link_title
+else
+    rm -f "$import_list.new"
+fi
+
 
 # 3. Checks the console would otherwise fail on: PT_LOAD congruence (CE-107750-0) and null imports.
 "$LLVM21/bin/llvm-readelf" -lW "$out/build/eboot.elf" | awk '

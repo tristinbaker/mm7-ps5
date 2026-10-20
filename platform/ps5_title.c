@@ -407,6 +407,15 @@ char *getcwd(char *buffer, size_t size) {
     return NULL;
 }
 
+// Null in a native title like getcwd. libc++'s std::filesystem::current_path asks it for the buffer size first.
+long pathconf(const char *path, int name) {
+    (void)path;
+    if (name == _PC_PATH_MAX)
+        return 1024;
+    errno = EINVAL;
+    return -1;
+}
+
 int isatty(int descriptor) {
     (void)descriptor;
     errno = ENOTTY;
