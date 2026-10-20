@@ -1,7 +1,7 @@
 From 6f2393a9bbabb519db9b4208ddce5372e2b0481b Mon Sep 17 00:00:00 2001
 From: Tristin Baker <tristinbaker@protonmail.com>
 Date: Tue, 20 Oct 2026 13:40:52 -0400
-Subject: [PATCH 4/4] Track gamepad buttons and sticks in KeyboardController
+Subject: [PATCH] Track gamepad buttons and sticks in KeyboardController
 
 Gameplay actions check KeyboardController for both their keyboard and their gamepad binding, but it only
 listened to keyboard events. Continuously triggered actions bound to the gamepad (walking, turning, looking)
