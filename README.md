@@ -60,8 +60,12 @@ shader compilation, display mode, and every DualSense input, rumble and light ba
 
 ## How it works
 
-- **OpenEnroth** gets three patches: an **SDL2 platform backend** (the PS5 homebrew SDL is 2.30, OpenEnroth uses
-  SDL3), an **OpenGL 3.3 core** mode (what the driver's SDL2 bridge accepts), and a **`ps5` build platform**.
+- **OpenEnroth** is patched (`patches/openenroth`) with an **SDL2 platform backend** (the PS5 homebrew SDL is 2.30,
+  OpenEnroth uses SDL3), an **OpenGL 3.3 core** mode (what the driver's SDL2 bridge accepts), a **`ps5` build
+  platform**, gamepad fixes, presenting frames with a draw (the driver blits scaled frames on the CPU), and the
+  **touchpad as the mouse**.
+- **SDL2** is the PS5 homebrew fork, built by ps5-opengl with its PS5 patches, plus `patches/ps5-sdl` (touchpad
+  input).
 - **Graphics** come from [ps5-opengl](https://github.com/mihawk-99/ps5-opengl) v1.0.0, a static Mesa/Gallium
   OpenGL 4.6 driver for the console's GPU. Native titles can't load shared libraries, so it is linked in.
 - **The title** is built with the PS5 payload SDK and the native app template's runtime, linker conversion and
@@ -78,7 +82,7 @@ shader compilation, display mode, and every DualSense input, rumble and light ba
 | `scripts/` | setup, build, package, install, debugging |
 | `toolchain/` | CMake toolchain file and compiler wrappers for the PS5 |
 | `platform/` | runtime glue linked into the title |
-| `patches/` | changes to OpenEnroth and ps5-opengl |
+| `patches/` | changes to OpenEnroth, ps5-opengl and SDL2 |
 | `tools/smoke-test/` | hardware check title |
 | `title/` | home-screen art, turned into the icon and backgrounds by `scripts/make-title-art.py` |
 | `docs/` | install guide |

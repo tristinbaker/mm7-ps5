@@ -1,0 +1,433 @@
+From 1ffdf5d143772f010f34118867dcb095e52a724d Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:12:09 -0400
+Subject: [PATCH] Add OE_GAMEPAD_TOUCHPAD_MOUSE: use a gamepad's touchpad as
+ the mouse
+
+For platforms without a mouse (the PS5). The SDL2 backend turns touchpad input into mouse events, like a laptop
+touchpad: a finger moves the pointer by its travel, pressing the pad left-clicks, pressing it with two fingers on
+it right-clicks, and repeated presses double-click. The pointer stays put while the pad is pressed, so clicks
+don't drag it off their target. SdlWindow::warpMouse and real mouse motion move the touchpad pointer as well.
+
+The game then always draws the arrow cursor itself and hides it after 3 seconds without mouse movement, and keeps
+the pointer inside the letterboxed picture. The custom arrow is now drawn with its tip, not its centre, at the
+pointer, which also fixes always_custom_cursor.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                                |   5 +
+ src/Application/GameWindowHandler.cpp         |  13 +-
+ src/Io/Mouse.cpp                              |  28 +++-
+ src/Io/Mouse.h                                |   9 ++
+ src/Library/Platform/Sdl2/SdlEventLoop.cpp    | 138 ++++++++++++++++++
+ src/Library/Platform/Sdl2/SdlEventLoop.h      |  21 +++
+ .../Platform/Sdl2/SdlPlatformSharedState.h    |  13 ++
+ src/Library/Platform/Sdl2/SdlWindow.cpp       |   3 +
+ 8 files changed, 225 insertions(+), 5 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 326e3b6..47d5fa7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -43,6 +43,7 @@ set(OE_USE_SANITIZERS "" CACHE STRING "Sanitizers to build with, passed on to -f
+ set(OE_GL33 OFF CACHE BOOL "Request an OpenGL 3.3 core context and GLSL 330 shaders instead of OpenGL 4.1.")
+ set(OE_USE_SDL2 OFF CACHE BOOL "Use SDL2 platform backend instead of SDL3, for platforms where only SDL2 is available.")
+ set(OE_PRESENT_WITH_DRAW OFF CACHE BOOL "Present the scaled frame by drawing a quad instead of glBlitFramebuffer, for drivers that blit on the CPU.")
++set(OE_GAMEPAD_TOUCHPAD_MOUSE OFF CACHE BOOL "Use a gamepad's touchpad as a mouse (SDL2 backend), for platforms that have no mouse. The game then draws the cursor itself, and hides it when idle.")
+ 
+ if(OE_DISTRIBUTION_BUILD)
+     add_compile_definitions(OE_DISTRIBUTION_BUILD)
+@@ -56,6 +57,10 @@ if(OE_PRESENT_WITH_DRAW)
+     add_compile_definitions(OE_PRESENT_WITH_DRAW)
+ endif()
+ 
++if(OE_GAMEPAD_TOUCHPAD_MOUSE)
++    add_compile_definitions(OE_GAMEPAD_TOUCHPAD_MOUSE)
++endif()
++
+ if(OE_USE_SDL2)
+     add_compile_definitions(OE_USE_SDL2) # Selects ImGui SDL2 backend in the code that calls into it directly.
+ endif()
+diff --git a/src/Application/GameWindowHandler.cpp b/src/Application/GameWindowHandler.cpp
+index 1668660..e00c4cb 100644
+--- a/src/Application/GameWindowHandler.cpp
++++ b/src/Application/GameWindowHandler.cpp
+@@ -462,7 +462,18 @@ bool GameWindowHandler::keyReleaseEvent(const PlatformKeyEvent *event) {
+ }
+ 
+ bool GameWindowHandler::mouseMoveEvent(const PlatformMouseEvent *event) {
+-    OnMouseMove(render->MapToRender(event->pos), event->rel, event->buttons & BUTTON_LEFT, event->buttons & BUTTON_RIGHT);
++    Pointi position = render->MapToRender(event->pos);
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    // The picture is letterboxed in the window. Keep the touchpad's pointer out of the bars, it would be invisible
++    // there, and moving it back would take a while.
++    Sizei renderSize = render->GetRenderDimensions();
++    Pointi clamped(std::clamp(position.x, 0, renderSize.w - 1), std::clamp(position.y, 0, renderSize.h - 1));
++    if (clamped != position) {
++        position = clamped;
++        window->warpMouse(render->MapToPresent(clamped));
++    }
++#endif
++    OnMouseMove(position, event->rel, event->buttons & BUTTON_LEFT, event->buttons & BUTTON_RIGHT);
+     return false;
+ }
+ 
+diff --git a/src/Io/Mouse.cpp b/src/Io/Mouse.cpp
+index caf0c43..9376345 100644
+--- a/src/Io/Mouse.cpp
++++ b/src/Io/Mouse.cpp
+@@ -42,10 +42,20 @@ Pointi Io::Mouse::setPosition(Pointi position) {
+     } else {
+         _position = position;
+     }
++    _lastMoveTime = platform->tickCount();
+ 
+     return _position;
+ }
+ 
++bool Io::Mouse::arrowIdle() const {
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    // With a touchpad for a mouse the arrow is in the way most of the time, so it only shows while it's being used.
++    return !_lastMoveTime || platform->tickCount() - *_lastMoveTime > 3000;
++#else
++    return false;
++#endif
++}
++
+ void Io::Mouse::SetCursorBitmapFromItemID(ItemId uItemID) {
+     SetCursorImage(pItemTable->items[uItemID].iconName);
+ }
+@@ -60,15 +70,20 @@ void Io::Mouse::SetCursorImage(std::string_view name) {
+     if (this->cursor_name != name)
+         this->cursor_name = name;
+ 
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    bool customArrow = true; // There might be no system cursor, and the arrow has to hide when idle.
++#else
++    bool customArrow = engine->config->graphics.AlwaysCustomCursor.value();
++#endif
++
+     ClearCursor();
+-    if (name == "MICON1" && !engine->config->graphics.AlwaysCustomCursor.value()) { // Arrow cursor.
+-        this->_arrowCursor = true;
++    this->_arrowCursor = name == "MICON1";
++    if (this->_arrowCursor && !customArrow) { // System arrow cursor.
+         platform->setCursorShown(true);
+         this->cursor_img = nullptr;
+     } else { // Cursor is item or another bitmap.
+         this->cursor_img = assets->getIcon(name);
+         this->AllocCursorSystemMem();
+-        this->_arrowCursor = false;
+     }
+ }
+ 
+@@ -124,7 +139,12 @@ void Io::Mouse::DrawCursor() {
+         //platform->setCursorShown(false);
+     } else {
+         // for other cursor img ie target mouse
+-        if (this->cursor_img) {
++        if (this->cursor_img && this->_arrowCursor) {
++            platform->setCursorShown(false);
++            // The arrow points at its top left corner.
++            if (!arrowIdle())
++                render->DrawQuad2D(this->cursor_img, pos);
++        } else if (this->cursor_img) {
+             platform->setCursorShown(false);
+             // draw image - needs centering
+             pos.x -= (this->cursor_img->width()) / 2;
+diff --git a/src/Io/Mouse.h b/src/Io/Mouse.h
+index 28e4f4f..528ac71 100644
+--- a/src/Io/Mouse.h
++++ b/src/Io/Mouse.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
++#include <cstdint>
+ #include <memory>
++#include <optional>
+ #include <string>
+ 
+ #include "Engine/Objects/ItemEnums.h"
+@@ -36,6 +38,12 @@ class Mouse {
+     void DrawCursor();
+     void DrawPickedItem();
+ 
++    /**
++     * @return                          Whether the arrow cursor isn't drawn because the mouse hasn't moved for a while.
++     *                                  Only happens with `OE_GAMEPAD_TOUCHPAD_MOUSE`.
++     */
++    bool arrowIdle() const;
++
+     void UI_OnMouseLeftClick(bool isDoubleClick);
+ 
+ 
+@@ -49,6 +57,7 @@ class Mouse {
+     Pointi pCursorBitmapPos{};
+     std::string cursor_name;
+     Pointi _position;
++    std::optional<int64_t> _lastMoveTime; // Platform tick count of the last mouse move, if there was one.
+ 
+     enum class MouseLookState { Disabled, Enabled, Suspended };
+     using enum MouseLookState;
+diff --git a/src/Library/Platform/Sdl2/SdlEventLoop.cpp b/src/Library/Platform/Sdl2/SdlEventLoop.cpp
+index 1b2874f..580c819 100644
+--- a/src/Library/Platform/Sdl2/SdlEventLoop.cpp
++++ b/src/Library/Platform/Sdl2/SdlEventLoop.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <algorithm>
+ #include <cassert>
++#include <cmath>
+ #include <vector>
+ 
+ #include "Library/Platform/Interface/PlatformEventHandler.h"
+@@ -103,6 +104,13 @@ void SdlEventLoop::dispatchEvent(PlatformEventHandler *eventHandler, const SDL_E
+     case SDL_TEXTINPUT:
+         dispatchTextInputEvent(eventHandler, &event->text);
+         break;
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    case SDL_CONTROLLERTOUCHPADDOWN:
++    case SDL_CONTROLLERTOUCHPADMOTION:
++    case SDL_CONTROLLERTOUCHPADUP:
++        dispatchTouchpadEvent(eventHandler, &event->ctouchpad);
++        break;
++#endif
+     default:
+         break;
+     }
+@@ -172,6 +180,9 @@ void SdlEventLoop::dispatchMouseMoveEvent(PlatformEventHandler *eventHandler, co
+     e.isDoubleClick = false;
+     e.pos = Pointi(event->x, event->y);
+     e.rel = Pointi(event->xrel, event->yrel);
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    _state->setTouchpadPointer(Vec2f(event->x, event->y)); // Continue from wherever a mouse or a warp left it.
++#endif
+     dispatchEvent(eventHandler, &e);
+ }
+ 
+@@ -327,6 +338,13 @@ void SdlEventLoop::dispatchGamepadDisconnectedEvent(PlatformEventHandler *eventH
+ }
+ 
+ void SdlEventLoop::dispatchGamepadButtonEvent(PlatformEventHandler *eventHandler, const SDL_ControllerButtonEvent *event) {
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    if (event->button == SDL_CONTROLLER_BUTTON_TOUCHPAD) {
++        dispatchTouchpadButtonEvent(eventHandler, event->type == SDL_CONTROLLERBUTTONDOWN);
++        return;
++    }
++#endif
++
+     PlatformGamepadKeyEvent e;
+     e.gamepad = _state->gamepad(event->which);
+     e.type = event->type == SDL_CONTROLLERBUTTONUP ? EVENT_GAMEPAD_KEY_RELEASE : EVENT_GAMEPAD_KEY_PRESS;
+@@ -364,3 +382,123 @@ void SdlEventLoop::dispatchTextInputEvent(PlatformEventHandler* eventHandler, co
+ 
+     dispatchEvent(eventHandler, &e);
+ }
++
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++// The touchpad works like a laptop's: sliding a finger moves the pointer, pressing the pad clicks, and pressing it
++// with two fingers on it right-clicks. The pointer moves by the finger's travel, a full swipe across the pad moving it
++// across the whole window. It doesn't move while the pad is pressed, so clicks don't drag it off what they're aimed at.
++static constexpr float TOUCHPAD_POINTER_SPEED = 1.0f;
++static constexpr uint64_t TOUCHPAD_DOUBLE_CLICK_MS = 500; // SDL's defaults for mice.
++static constexpr float TOUCHPAD_DOUBLE_CLICK_RADIUS = 32.0f;
++
++void SdlEventLoop::dispatchTouchpadEvent(PlatformEventHandler *eventHandler, const SDL_ControllerTouchpadEvent *event) {
++    if (event->touchpad != 0 || event->finger < 0 || event->finger >= static_cast<int>(_touchpadFingerDown.size()))
++        return;
++
++    PlatformWindow *window = touchpadWindow();
++    if (!window)
++        return;
++
++    int finger = event->finger;
++    Vec2f pos(event->x, event->y);
++    Vec2f lastPos = _touchpadFingerPos[finger];
++    _touchpadFingerPos[finger] = pos;
++
++    switch (event->type) {
++    case SDL_CONTROLLERTOUCHPADDOWN:
++        _touchpadFingerDown[finger] = true;
++        if (_touchpadMovingFinger == -1)
++            _touchpadMovingFinger = finger;
++        if (_state->touchpadPointer().x < 0) {
++            Sizei size = window->size();
++            _state->setTouchpadPointer(Vec2f(size.w / 2.0f, size.h / 2.0f));
++        }
++        dispatchTouchpadMoveEvent(eventHandler, window, Vec2f()); // Lets the app show the pointer.
++        break;
++    case SDL_CONTROLLERTOUCHPADUP:
++        _touchpadFingerDown[finger] = false;
++        if (_touchpadMovingFinger == finger)
++            _touchpadMovingFinger = _touchpadFingerDown[1 - finger] ? 1 - finger : -1;
++        break;
++    case SDL_CONTROLLERTOUCHPADMOTION:
++        if (finger == _touchpadMovingFinger && _touchpadButton == BUTTON_NONE) {
++            Sizei size = window->size();
++            Vec2f rel((pos.x - lastPos.x) * size.w * TOUCHPAD_POINTER_SPEED, (pos.y - lastPos.y) * size.h * TOUCHPAD_POINTER_SPEED);
++            dispatchTouchpadMoveEvent(eventHandler, window, rel);
++        }
++        break;
++    default:
++        break;
++    }
++}
++
++void SdlEventLoop::dispatchTouchpadMoveEvent(PlatformEventHandler *eventHandler, PlatformWindow *window, Vec2f rel) {
++    Sizei size = window->size();
++    Vec2f oldPointer = _state->touchpadPointer();
++    Vec2f pointer(std::clamp(oldPointer.x + rel.x, 0.0f, size.w - 1.0f), std::clamp(oldPointer.y + rel.y, 0.0f, size.h - 1.0f));
++    _state->setTouchpadPointer(pointer);
++
++    PlatformMouseEvent e;
++    e.type = EVENT_MOUSE_MOVE;
++    e.window = window;
++    e.button = BUTTON_NONE;
++    if (_touchpadButton != BUTTON_NONE)
++        e.buttons = _touchpadButton;
++    e.isDoubleClick = false;
++    e.pos = Pointi(pointer.x, pointer.y);
++    e.rel = Pointi(e.pos.x - static_cast<int>(oldPointer.x), e.pos.y - static_cast<int>(oldPointer.y));
++    dispatchEvent(eventHandler, &e);
++}
++
++void SdlEventLoop::dispatchTouchpadButtonEvent(PlatformEventHandler *eventHandler, bool pressed) {
++    PlatformWindow *window = touchpadWindow();
++    Vec2f pointer = _state->touchpadPointer();
++    if (!window || pointer.x < 0)
++        return; // The pointer hasn't been shown yet.
++
++    PlatformMouseEvent e;
++    e.window = window;
++    e.pos = Pointi(pointer.x, pointer.y);
++    e.isDoubleClick = false;
++
++    if (pressed) {
++        if (_touchpadButton != BUTTON_NONE)
++            return;
++
++        int fingers = std::count(_touchpadFingerDown.begin(), _touchpadFingerDown.end(), true);
++        _touchpadButton = fingers >= 2 ? BUTTON_RIGHT : BUTTON_LEFT;
++
++        uint64_t now = SDL_GetTicks64();
++        Vec2f moved = pointer - _touchpadLastPressPos;
++        if (_touchpadButton == _touchpadLastButton && now - _touchpadLastPressTicks <= TOUCHPAD_DOUBLE_CLICK_MS &&
++            std::hypot(moved.x, moved.y) <= TOUCHPAD_DOUBLE_CLICK_RADIUS) {
++            _touchpadClicks++;
++        } else {
++            _touchpadClicks = 1;
++        }
++        _touchpadLastButton = _touchpadButton;
++        _touchpadLastPressTicks = now;
++        _touchpadLastPressPos = pointer;
++
++        e.type = EVENT_MOUSE_BUTTON_PRESS;
++        e.button = _touchpadButton;
++        e.buttons = _touchpadButton;
++        e.isDoubleClick = _touchpadClicks % 2 == 0; // Every second click, like for mice in dispatchMouseButtonEvent.
++    } else {
++        if (_touchpadButton == BUTTON_NONE)
++            return;
++
++        e.type = EVENT_MOUSE_BUTTON_RELEASE;
++        e.button = _touchpadButton;
++        _touchpadButton = BUTTON_NONE;
++    }
++
++    dispatchEvent(eventHandler, &e);
++}
++
++PlatformWindow *SdlEventLoop::touchpadWindow() const {
++    // Gamepad events don't belong to a window. Apps with a touchpad mouse have a single one.
++    std::vector<uint32_t> ids = _state->allWindowIds();
++    return ids.empty() ? nullptr : _state->window(ids.front());
++}
++#endif
+diff --git a/src/Library/Platform/Sdl2/SdlEventLoop.h b/src/Library/Platform/Sdl2/SdlEventLoop.h
+index 96b7d63..2020b95 100644
+--- a/src/Library/Platform/Sdl2/SdlEventLoop.h
++++ b/src/Library/Platform/Sdl2/SdlEventLoop.h
+@@ -2,6 +2,10 @@
+ 
+ #include <SDL.h>
+ 
++#include <array>
++#include <cstdint>
++
++#include "Library/Geometry/Vec.h"
+ #include "Library/Platform/Interface/PlatformEventLoop.h"
+ #include "Library/Platform/Interface/PlatformEvents.h"
+ 
+@@ -36,8 +40,25 @@ class SdlEventLoop: public PlatformEventLoop {
+     void dispatchGamepadButtonEvent(PlatformEventHandler *eventHandler, const SDL_ControllerButtonEvent *event);
+     void dispatchGamepadAxisEvent(PlatformEventHandler *eventHandler, const SDL_ControllerAxisEvent *event);
+     void dispatchTextInputEvent(PlatformEventHandler *eventHandler, const SDL_TextInputEvent *event);
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    void dispatchTouchpadEvent(PlatformEventHandler *eventHandler, const SDL_ControllerTouchpadEvent *event);
++    void dispatchTouchpadButtonEvent(PlatformEventHandler *eventHandler, bool pressed);
++    void dispatchTouchpadMoveEvent(PlatformEventHandler *eventHandler, PlatformWindow *window, Vec2f rel);
++    PlatformWindow *touchpadWindow() const;
++#endif
+ 
+  private:
+     SdlPlatformSharedState *_state = nullptr;
+     bool _quitRequested = false;
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    // Gamepad touchpad mouse, see dispatchTouchpadEvent. The pointer position itself is in _state.
++    std::array<bool, 2> _touchpadFingerDown = {};
++    std::array<Vec2f, 2> _touchpadFingerPos = {}; // Last position of each finger on the touchpad, in [0, 1].
++    int _touchpadMovingFinger = -1; // The finger that moves the pointer, -1 if none is down.
++    PlatformMouseButton _touchpadButton = BUTTON_NONE; // Button that the current touchpad press is holding down.
++    PlatformMouseButton _touchpadLastButton = BUTTON_NONE;
++    uint64_t _touchpadLastPressTicks = 0;
++    Vec2f _touchpadLastPressPos;
++    int _touchpadClicks = 0;
++#endif
+ };
+diff --git a/src/Library/Platform/Sdl2/SdlPlatformSharedState.h b/src/Library/Platform/Sdl2/SdlPlatformSharedState.h
+index ac218cb..3d97113 100644
+--- a/src/Library/Platform/Sdl2/SdlPlatformSharedState.h
++++ b/src/Library/Platform/Sdl2/SdlPlatformSharedState.h
+@@ -7,6 +7,7 @@
+ #include <unordered_map>
+ #include <memory>
+ 
++#include "Library/Geometry/Vec.h"
+ #include "Library/Logger/LogCategory.h"
+ #include "Library/Logger/LogEnums.h"
+ 
+@@ -45,8 +46,20 @@ class SdlPlatformSharedState {
+     std::vector<PlatformGamepad *> allGamepads() const;
+     SdlGamepad *gamepad(SDL_JoystickID id) const;
+ 
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    /**
++     * Pointer position of the gamepad touchpad mouse (see `SdlEventLoop`), in window coordinates. Negative until the
++     * touchpad is first used. Kept here so that `SdlWindow::warpMouse` moves it too.
++     */
++    Vec2f touchpadPointer() const { return _touchpadPointer; }
++    void setTouchpadPointer(Vec2f position) { _touchpadPointer = position; }
++#endif
++
+  private:
+     std::unordered_map<uint32_t, SdlWindow *> _windowById;
+     std::unordered_map<SDL_JoystickID, std::unique_ptr<SdlGamepad>> _gamepadById;
+     size_t _eventLoopCount = 0;
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    Vec2f _touchpadPointer = {-1, -1};
++#endif
+ };
+diff --git a/src/Library/Platform/Sdl2/SdlWindow.cpp b/src/Library/Platform/Sdl2/SdlWindow.cpp
+index 9c2a71d..8580c7b 100644
+--- a/src/Library/Platform/Sdl2/SdlWindow.cpp
++++ b/src/Library/Platform/Sdl2/SdlWindow.cpp
+@@ -185,6 +185,9 @@ void SdlWindow::activate() {
+ 
+ void SdlWindow::warpMouse(Pointi position) {
+     SDL_WarpMouseInWindow(_window, position.x, position.y);
++#ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
++    _state->setTouchpadPointer(Vec2f(position.x, position.y));
++#endif
+ }
+ 
+ std::unique_ptr<PlatformOpenGLContext> SdlWindow::createOpenGLContext(const PlatformOpenGLOptions &options) {

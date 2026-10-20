@@ -1,0 +1,49 @@
+From 6676a62dde2d5ebb55270a56ff801daec40f9430 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:11:22 -0400
+Subject: [PATCH] SDL2 integration: accept extra SDL patches
+
+build.py applies its own static and joystick patches to an archive of the pinned SDL commit, so changes to an
+SDL checkout never reach the build. --extra-patch applies more patches after those; they are copied into the
+integration snapshot, so the receipt covers them like the integration's own inputs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ integration/SDL2/build.py | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/integration/SDL2/build.py b/integration/SDL2/build.py
+index d457566..c9e80fa 100644
+--- a/integration/SDL2/build.py
++++ b/integration/SDL2/build.py
+@@ -236,6 +236,9 @@ def main():
+     parser.add_argument("--compiler-wrapper", type=Path)
+     parser.add_argument("--input-validation", action="store_true",
+                         help="select the 120-second physical input/reconnect consumer (default: 180-frame smoke)")
++    parser.add_argument("--extra-patch", action="append", default=[], type=Path,
++                        help="also apply this patch to SDL, after the integration's own (repeatable); it is "
++                             "recorded in the receipt with the integration inputs")
+     args = parser.parse_args()
+     source, prefix, out = (p.resolve() for p in (args.sdl_source, args.sdk_prefix, args.out))
+     # Never write into the source cache, SDK, another checkout or an existing stage.
+@@ -252,6 +255,10 @@ def main():
+     out.mkdir(parents=True)
+     lane = out / "integration"
+     shutil.copytree(HERE, lane, ignore=shutil.ignore_patterns("__pycache__"))
++    extra_patches = []
++    for index, patch in enumerate(args.extra_patch):
++        extra_patches.append(lane / f"extra-{index:02d}-{patch.name}")
++        shutil.copy2(patch, extra_patches[-1])
+     snapshot = out / "SDL"
+     snapshot.mkdir()
+     archive = out / "sdl-source.tar"
+@@ -269,6 +276,9 @@ def main():
+     run("git", "apply", lane / "static-ps5.patch", cwd=snapshot)
+     run("git", "apply", "--check", lane / "ps5-joystick.patch", cwd=snapshot)
+     run("git", "apply", lane / "ps5-joystick.patch", cwd=snapshot)
++    for patch in extra_patches:
++        run("git", "apply", "--check", patch, cwd=snapshot)
++        run("git", "apply", patch, cwd=snapshot)
+     if "Altered for this statically linked PS5 SDL2 build" not in (snapshot / "src/dynapi/SDL_dynapi.h").read_text():
+         raise SystemExit("SDL static patch was not applied")
+     configure = ["cmake", "-S", lane, "-B", out / "cmake", "-G", "Ninja",

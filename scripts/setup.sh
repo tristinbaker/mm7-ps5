@@ -18,7 +18,7 @@ TEMPLATE_COMMIT=4f531c4b517f80bcb6b1267135848168d2250047
 PS5_OPENGL_URL=${PS5_OPENGL_URL:-https://github.com/mihawk-99/ps5-opengl.git}
 PS5_OPENGL_TAG=v1.0.0
 PS5_OPENGL_COMMIT=dce74910af7f4274c48d05e0ae001b3038462588
-# The PS5 SDL2 fork ps5-opengl's SDL2 bridge is built against.
+# The PS5 SDL2 fork ps5-opengl's SDL2 bridge is built against. patches/ps5-sdl go on top of ps5-opengl's own SDL patches.
 PS5_SDL_URL=${PS5_SDL_URL:-https://github.com/ps5-payload-dev/SDL.git}
 PS5_SDL_COMMIT=8c56053f13ca13a0c050de613706ff69eb615836
 # OpenEnroth, with patches/openenroth applied on a ps5 branch.
@@ -103,16 +103,22 @@ if ! step_done ps5-opengl "$gl_pin"; then
     mark_done ps5-opengl "$gl_pin"
 fi
 
-if ! step_done sdl2 "$PS5_SDL_COMMIT $gl_pin"; then
-    say "SDL2 $PS5_SDL_COMMIT with ps5-opengl's video driver and the PS5 audio driver"
+sdl_pin="$PS5_SDL_COMMIT $(cat "$MM_PS5_ROOT"/patches/ps5-sdl/*.patch | sha256sum | cut -c1-16) $gl_pin"
+if ! step_done sdl2 "$sdl_pin"; then
+    say "SDL2 $PS5_SDL_COMMIT with patches/ps5-sdl, ps5-opengl's video driver and the PS5 audio driver"
     checkout_commit "$PS5_SDL_URL" "$MM_PS5_DEPS/ps5-sdl" "$PS5_SDL_COMMIT"
     rm -rf "$gl/build/sdl2-native"
+    # build.py builds an archive of the pinned commit with its own patches, then ours (patches/ps5-opengl/0002).
+    sdl_patches=()
+    for patch in "$MM_PS5_ROOT"/patches/ps5-sdl/*.patch; do
+        sdl_patches+=(--extra-patch "$patch")
+    done
     python3 "$gl/integration/SDL2/build.py" native --sdl-source "$MM_PS5_DEPS/ps5-sdl" \
         --sdk-prefix "$gl/build/sdk/ps5-opengl-gl46" --out "$gl/build/sdl2-native" \
-        --payload-sdk "$PS5_PAYLOAD_SDK" --compiler-wrapper "$template/tooling/prospero-clang18" \
+        --payload-sdk "$PS5_PAYLOAD_SDK" --compiler-wrapper "$template/tooling/prospero-clang18" "${sdl_patches[@]}" \
         > "$MM_PS5_DEPS/sdl2-build.log" 2>&1 ||
         { tail -30 "$MM_PS5_DEPS/sdl2-build.log"; echo "SDL2 build failed, see deps/sdl2-build.log" >&2; exit 1; }
-    mark_done sdl2 "$PS5_SDL_COMMIT $gl_pin"
+    mark_done sdl2 "$sdl_pin"
 fi
 
 oe=$MM_PS5_DEPS/openenroth

@@ -1,0 +1,118 @@
+From df1aaf5869077182d39976e25de3b2f2116a9ce3 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 14:11:09 -0400
+Subject: [PATCH] ps5: report touchpad fingers
+
+The pad already returns up to two touches with every state read; report them as the joystick's touchpad so
+games get SDL_CONTROLLERTOUCHPAD* events. Each touch keeps its finger slot while it stays down: the pad lists
+active touches in order, so the second one moves to the first entry when the first finger lifts. The touchpad is
+read before the buttons, so that a touchpad press arrives after the fingers it was made with.
+
+Applies on top of ps5-opengl's integration/SDL2/ps5-joystick.patch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/joystick/ps5/SDL_ps5joystick.c | 53 ++++++++++++++++++++++++++++++
+ src/joystick/ps5/SDL_ps5joystick.h |  4 +++
+ 2 files changed, 57 insertions(+)
+
+diff --git a/src/joystick/ps5/SDL_ps5joystick.c b/src/joystick/ps5/SDL_ps5joystick.c
+index 5d7969f..81a8c93 100644
+--- a/src/joystick/ps5/SDL_ps5joystick.c
++++ b/src/joystick/ps5/SDL_ps5joystick.c
+@@ -50,6 +50,9 @@ typedef struct PS5_PadContext
+     SDL_JoystickGUID global_id;
+     SDL_JoystickID instance_id;
+     PS5_PadData pad;
++    int touch_id[2]; // The pad's id of the touch reported in each touchpad finger slot, -1 if the slot is free.
++    float touch_x[2];
++    float touch_y[2];
+ } PS5_PadContext;
+ 
+ static PS5_PadContext pad_ctx[PS5_MAX_USERS];
+@@ -185,6 +188,50 @@ static SDL_bool PS5_JoystickGetGamepadMapping(int device_index, SDL_GamepadMappi
+     return SDL_TRUE;
+ }
+ 
++static float PS5_TouchCoordinate(uint16_t value, float max)
++{
++    return SDL_clamp(value / max, 0.0f, 1.0f);
++}
++
++// The pad lists the touches that are down in order, so when the first finger lifts the second one moves to the
++// first entry. Keep every touch in the same finger slot for as long as it stays down, matching them by touch id.
++static void PS5_JoystickUpdateTouchpad(SDL_Joystick *joystick, PS5_PadContext *ctx, const PS5_PadTouchData *touch)
++{
++    int fingers = SDL_min(touch->fingers, 2);
++    SDL_bool seen[2] = { SDL_FALSE, SDL_FALSE };
++
++    for (int i = 0; i < fingers; i++) {
++        const PS5_PadTouch *t = &touch->touch[i];
++        int slot = -1;
++        for (int s = 0; s < 2; s++) {
++            if (ctx->touch_id[s] == t->finger) {
++                slot = s;
++            }
++        }
++        for (int s = 0; s < 2 && slot < 0; s++) {
++            if (ctx->touch_id[s] < 0) {
++                slot = s;
++            }
++        }
++        if (slot < 0 || seen[slot]) {
++            continue; // A new touch while both slots are still taken by touches that just lifted; next update.
++        }
++
++        seen[slot] = SDL_TRUE;
++        ctx->touch_id[slot] = t->finger;
++        ctx->touch_x[slot] = PS5_TouchCoordinate(t->x, PS5_PAD_TOUCH_WIDTH - 1);
++        ctx->touch_y[slot] = PS5_TouchCoordinate(t->y, PS5_PAD_TOUCH_HEIGHT - 1);
++        SDL_PrivateJoystickTouchpad(joystick, 0, slot, SDL_PRESSED, ctx->touch_x[slot], ctx->touch_y[slot], 1.0f);
++    }
++
++    for (int s = 0; s < 2; s++) {
++        if (!seen[s] && ctx->touch_id[s] >= 0) {
++            ctx->touch_id[s] = -1;
++            SDL_PrivateJoystickTouchpad(joystick, 0, s, SDL_RELEASED, ctx->touch_x[s], ctx->touch_y[s], 0.0f);
++        }
++    }
++}
++
+ static void PS5_JoystickUpdate(SDL_Joystick *joystick)
+ {
+     PS5_PadContext *ctx = PS5_JoystickGetPadContext(joystick);
+@@ -215,6 +262,9 @@ static void PS5_JoystickUpdate(SDL_Joystick *joystick)
+     SDL_PrivateJoystickAxis(joystick, PS5_PAD_AXIS_L2, analog_map[pad.analogButtons.l2]);
+     SDL_PrivateJoystickAxis(joystick, PS5_PAD_AXIS_R2, analog_map[pad.analogButtons.r2]);
+ 
++    // Touchpad before buttons, so that the fingers a touchpad press is made with are known when it's reported.
++    PS5_JoystickUpdateTouchpad(joystick, ctx, &pad.touch);
++
+     // Buttons
+     btn_change = ctx->pad.buttons ^ pad.buttons;
+     if (btn_change) {
+@@ -346,6 +396,9 @@ static int PS5_JoystickOpen(SDL_Joystick *joystick, int device_index)
+     joystick->naxes = 6;
+     joystick->nhats = 1;
+     joystick->instance_id = ctx->instance_id;
++    SDL_PrivateJoystickAddTouchpad(joystick, 2);
++    ctx->touch_id[0] = -1;
++    ctx->touch_id[1] = -1;
+     return 0;
+ }
+ 
+diff --git a/src/joystick/ps5/SDL_ps5joystick.h b/src/joystick/ps5/SDL_ps5joystick.h
+index 294a266..b842db5 100644
+--- a/src/joystick/ps5/SDL_ps5joystick.h
++++ b/src/joystick/ps5/SDL_ps5joystick.h
+@@ -19,6 +19,10 @@
+ #define PS5_PAD_BUTTON_SQUARE    0x8000
+ #define PS5_PAD_BUTTON_TOUCH_PAD 0x100000
+ 
++// Touch coordinates go from 0 to these minus one.
++#define PS5_PAD_TOUCH_WIDTH      1920
++#define PS5_PAD_TOUCH_HEIGHT     1080
++
+ typedef struct PS5_PadTouch
+ {
+     uint16_t x;

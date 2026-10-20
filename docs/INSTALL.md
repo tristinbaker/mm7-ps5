@@ -54,9 +54,14 @@ Controller support is still in progress.
 | Options | Inventory | |
 | Create | Rest | Rest 8 hours (in the rest menu) |
 | D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move between choices |
+| Touchpad | Mouse cursor, see below | Mouse cursor |
 
-Known problems: there is no cursor yet, so the inventory, spellbook, shops and parts of dialogs need more than the
-controller can currently do. The sticks work like keys (walk or don't, turn at one speed) rather than analog.
+**The touchpad is the mouse**, like a laptop's: slide a finger to move the cursor, press the pad to click, and
+press it with two fingers on it to right-click (hold for the info pop-ups). The cursor appears when you touch the
+pad and hides again after a few seconds. Use it for the inventory, spellbook, shops and anything else that needs a
+mouse.
+
+Known problems: the sticks work like keys (walk or don't, turn at one speed) rather than analog.
 
 The layout is written to the game's configuration when the title starts. You can change bindings in the game's
 controls menu; a release that changes the layout replaces the gamepad bindings once.
