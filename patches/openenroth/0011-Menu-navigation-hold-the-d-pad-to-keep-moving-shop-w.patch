@@ -1,0 +1,456 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 15:33:08 -0400
+Subject: [PATCH] Menu navigation: hold the d-pad to keep moving, shop wares as
+ targets
+
+Holding a d-pad direction in menus now repeats the step (after 300 ms, then every 70 ms), driven from
+GUI_UpdateWindows. Moving an item across the inventory took a press per cell.
+
+Shop screens click through one big UIMSG_HouseScreenClick button, so the navigation only had its middle. Houses now
+collect where clicks do something while they draw (GUIWindow_House::screenClickTargets): the wares in weapon,
+armor, magic and alchemy shops and guilds, and the inventory cells when selling, identifying and repairing.
+inventoryCellCenters (ItemGrid) is shared with the character inventory and chests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Application/GameWindowHandler.cpp | 37 +++++++-------
+ src/GUI/GUIWindow.cpp                 |  4 ++
+ src/GUI/UI/Houses/MagicGuild.cpp      |  2 +
+ src/GUI/UI/Houses/Shops.cpp           | 13 +++++
+ src/GUI/UI/Houses/Shops.h             |  1 +
+ src/GUI/UI/ItemGrid.cpp               |  8 ++++
+ src/GUI/UI/ItemGrid.h                 | 10 ++++
+ src/GUI/UI/UIHouses.cpp               |  1 +
+ src/GUI/UI/UIHouses.h                 | 13 +++++
+ src/Io/MenuNavigation.cpp             | 69 +++++++++++++++++++++++----
+ src/Io/MenuNavigation.h               | 20 ++++++++
+ 11 files changed, 148 insertions(+), 30 deletions(-)
+
+diff --git a/src/Application/GameWindowHandler.cpp b/src/Application/GameWindowHandler.cpp
+index f70ccad..7d16469 100644
+--- a/src/Application/GameWindowHandler.cpp
++++ b/src/Application/GameWindowHandler.cpp
+@@ -596,31 +596,24 @@ bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *ev
+ static constexpr PlatformKey MENU_RIGHT_CLICK_KEY = PlatformKey::KEY_GAMEPAD_X;
+ static constexpr int64_t MENU_DOUBLE_CLICK_MS = 500;
+ 
++static Pointi menuNavigationDirection(PlatformKey key) {
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_UP, key))
++        return Pointi(0, -1);
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_DOWN, key))
++        return Pointi(0, 1);
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_LEFT, key))
++        return Pointi(-1, 0);
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_RIGHT, key))
++        return Pointi(1, 0);
++    return Pointi();
++}
++
+ bool GameWindowHandler::menuNavigationKeyPress(PlatformKey key) {
+     if (!mouse || pArcomageGame->_gameInProgress || currently_selected_action_for_binding != INPUT_ACTION_INVALID)
+         return false;
+ 
+-    Pointi direction;
+-    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_UP, key)) {
+-        direction = Pointi(0, -1);
+-    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_DOWN, key)) {
+-        direction = Pointi(0, 1);
+-    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_LEFT, key)) {
+-        direction = Pointi(-1, 0);
+-    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_RIGHT, key)) {
+-        direction = Pointi(1, 0);
+-    }
+-
+-    if (direction != Pointi()) {
+-        std::vector<Pointi> targets = Io::menuNavigationTargets();
+-        if (targets.empty())
+-            return false; // No menu open, the d-pad acts in the game.
+-        if (std::optional<Pointi> target = Io::menuNavigationStep(targets, mouse->position(), direction)) {
+-            mouse->warpMouse(*target);
+-            OnMouseMove(*target, Pointi(), false, false);
+-        }
+-        return true;
+-    }
++    if (Pointi direction = menuNavigationDirection(key); direction != Pointi())
++        return Io::pressMenuNavigation(direction); // If no menu is open, the d-pad acts in the game.
+ 
+     PlatformMouseButton button = BUTTON_NONE;
+     if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_PRESS, key)) {
+@@ -654,6 +647,8 @@ bool GameWindowHandler::menuNavigationKeyPress(PlatformKey key) {
+ }
+ 
+ bool GameWindowHandler::menuNavigationKeyRelease(PlatformKey key) {
++    if (Pointi direction = menuNavigationDirection(key); direction != Pointi())
++        Io::releaseMenuNavigation(direction); // And let it through, whoever got the press.
+     if (key == PlatformKey::KEY_NONE || key != _menuClickKey)
+         return false;
+ 
+diff --git a/src/GUI/GUIWindow.cpp b/src/GUI/GUIWindow.cpp
+index 3f0508d..183c1aa 100644
+--- a/src/GUI/GUIWindow.cpp
++++ b/src/GUI/GUIWindow.cpp
+@@ -44,6 +44,7 @@
+ 
+ #include "Io/InputEnums.h"
+ #include "Io/KeyboardInputHandler.h"
++#include "Io/MenuNavigation.h"
+ #include "Io/Mouse.h"
+ 
+ #include "Media/Audio/AudioPlayer.h"
+@@ -529,6 +530,9 @@ void OnCancel3::Update() {
+ }
+ 
+ void GUI_UpdateWindows() {
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    Io::updateMenuNavigation(); // Holding the d-pad keeps moving the cursor.
++#endif
+     if (GetCurrentMenuID() != MENU_CREATEPARTY) {
+         extern bool UI_OnKeyDown(PlatformKey key);
+         UI_OnKeyDown(PlatformKey::KEY_PAGEDOWN); // hack to highlight dialog options under mouse cursor
+diff --git a/src/GUI/UI/Houses/MagicGuild.cpp b/src/GUI/UI/Houses/MagicGuild.cpp
+index 132fe43..c0e5f12 100644
+--- a/src/GUI/UI/Houses/MagicGuild.cpp
++++ b/src/GUI/UI/Houses/MagicGuild.cpp
+@@ -158,9 +158,11 @@ void GUIWindow_MagicGuild::buyBooksDialogue() {
+     for (int pX = 32; pX < 452; pX += 70) {  // top row
+         if (pParty->spellBooksInGuilds[houseId()][itemxind].itemId != ITEM_NULL) {
+             render->DrawQuad2D(shop_ui_items_in_store[itemxind], {pX, 90});
++            addScreenClickTarget(Recti({pX, 90}, shop_ui_items_in_store[itemxind]->size()));
+         }
+         if (pParty->spellBooksInGuilds[houseId()][itemxind + 6].itemId != ITEM_NULL) {
+             render->DrawQuad2D(shop_ui_items_in_store[itemxind + 6], {pX, 250});
++            addScreenClickTarget(Recti({pX, 250}, shop_ui_items_in_store[itemxind + 6]->size()));
+         }
+ 
+         ++itemxind;
+diff --git a/src/GUI/UI/Houses/Shops.cpp b/src/GUI/UI/Houses/Shops.cpp
+index d4c7ff8..d9e6754 100644
+--- a/src/GUI/UI/Houses/Shops.cpp
++++ b/src/GUI/UI/Houses/Shops.cpp
+@@ -261,9 +261,15 @@ void GUIWindow_Shop::mainDialogue() {
+     drawOptions(optionsText, colorTable.Sunflower);
+ }
+ 
++void GUIWindow_Shop::addInventoryClickTargets() {
++    for (Pointi center : inventoryCellCenters({14, 17}, pParty->activeCharacter().inventory.gridSize()))
++        _screenClickTargets.push_back(center);
++}
++
+ void GUIWindow_Shop::displayEquipmentDialogue() {
+     draw_leather();
+     CharacterUI_InventoryTab_Draw(&pParty->activeCharacter(), true);
++    addInventoryClickTargets();
+ 
+     std::vector<std::string> optionsText = {localization->str(LSTR_SELL), localization->str(LSTR_IDENTIFY)};
+ 
+@@ -282,6 +288,7 @@ void GUIWindow_Shop::sellDialogue() {
+ 
+     draw_leather();
+     CharacterUI_InventoryTab_Draw(&pParty->activeCharacter(), true);
++    addInventoryClickTargets();
+ 
+     if (checkIfPlayerCanInteract()) {
+         engine->_statusBar->drawForced(localization->str(LSTR_SELECT_THE_ITEM_TO_SELL), colorTable.White);
+@@ -308,6 +315,7 @@ void GUIWindow_Shop::identifyDialogue() {
+     dialogwin.w = SIDE_TEXT_BOX_WIDTH;
+     draw_leather();
+     CharacterUI_InventoryTab_Draw(&pParty->activeCharacter(), true);
++    addInventoryClickTargets();
+ 
+     if (checkIfPlayerCanInteract()) {
+         engine->_statusBar->drawForced(localization->str(LSTR_SELECT_THE_ITEM_TO_IDENTIFY), colorTable.White);
+@@ -343,6 +351,7 @@ void GUIWindow_Shop::repairDialogue() {
+ 
+     draw_leather();
+     CharacterUI_InventoryTab_Draw(&pParty->activeCharacter(), true);
++    addInventoryClickTargets();
+ 
+     if (checkIfPlayerCanInteract()) {
+         engine->_statusBar->drawForced(localization->str(LSTR_SELECT_THE_ITEM_TO_REPAIR), colorTable.White);
+@@ -381,6 +390,7 @@ void GUIWindow_WeaponShop::shopWaresDialogue(bool isSpecial) {
+         if (itemPresent) {
+             int itemPosX = 60 - shop_ui_items_in_store[i]->width() / 2 + item_X;
+             render->DrawQuad2D(shop_ui_items_in_store[i], {itemPosX, weaponYPos[i] + 30});
++            addScreenClickTarget(Recti({itemPosX, weaponYPos[i] + 30}, shop_ui_items_in_store[i]->size()));
+         }
+ 
+         item_X += 70;
+@@ -450,10 +460,12 @@ void GUIWindow_ArmorShop::shopWaresDialogue(bool isSpecial) {
+             if (i >= 4) {
+                 int itemPosX = 90 - shop_ui_items_in_store[i]->width() / 2 + item_x - 420;
+                 render->DrawQuad2D(shop_ui_items_in_store[i], {itemPosX, 126});
++                addScreenClickTarget(Recti({itemPosX, 126}, shop_ui_items_in_store[i]->size()));
+             } else {
+                 int x = ((86 - (shop_ui_items_in_store[i]->width() / 2)) + item_x);
+                 int y = (98 - (shop_ui_items_in_store[i]->height()));
+                 render->DrawQuad2D(shop_ui_items_in_store[i], {x, y});
++                addScreenClickTarget(Recti({x, y}, shop_ui_items_in_store[i]->size()));
+             }
+         }
+         item_x += 105;
+@@ -558,6 +570,7 @@ void GUIWindow_MagicAlchemyShop::shopWaresDialogue(bool isSpecial) {
+             }
+ 
+             render->DrawQuad2D(shop_ui_items_in_store[i], {itemx, itemy});
++            addScreenClickTarget(Recti({itemx, itemy}, shop_ui_items_in_store[i]->size()));
+         }
+     }
+ 
+diff --git a/src/GUI/UI/Houses/Shops.h b/src/GUI/UI/Houses/Shops.h
+index 2366f2d..c363be1 100644
+--- a/src/GUI/UI/Houses/Shops.h
++++ b/src/GUI/UI/Houses/Shops.h
+@@ -23,6 +23,7 @@ class GUIWindow_Shop : public GUIWindow_House {
+     void processStealingResult(int stealingResult, int fineToAdd);
+ 
+  private:
++    void addInventoryClickTargets(); // The active character's inventory, as drawn by CharacterUI_InventoryTab_Draw.
+     void mainDialogue();
+     void displayEquipmentDialogue();
+     void sellDialogue();
+diff --git a/src/GUI/UI/ItemGrid.cpp b/src/GUI/UI/ItemGrid.cpp
+index 96d09f3..f87ea03 100644
+--- a/src/GUI/UI/ItemGrid.cpp
++++ b/src/GUI/UI/ItemGrid.cpp
+@@ -42,3 +42,11 @@ Pointi mapToInventoryGrid(Pointi mousePos, Pointi inventoryTopLeft, Item* heldIt
+ Pointi mapFromInventoryGrid(Pointi gridPos, Pointi inventoryTopLeft) {
+     return gridPos * 32 + inventoryTopLeft;
+ }
++
++std::vector<Pointi> inventoryCellCenters(Pointi inventoryTopLeft, Sizei gridSize) {
++    std::vector<Pointi> result;
++    for (int y = 0; y < gridSize.h; y++)
++        for (int x = 0; x < gridSize.w; x++)
++            result.push_back(mapFromInventoryGrid(Pointi(x, y), inventoryTopLeft) + Pointi(16, 16));
++    return result;
++}
+diff --git a/src/GUI/UI/ItemGrid.h b/src/GUI/UI/ItemGrid.h
+index 783b381..afef63e 100644
+--- a/src/GUI/UI/ItemGrid.h
++++ b/src/GUI/UI/ItemGrid.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
++#include <vector>
++
+ #include "Library/Geometry/Point.h"
++#include "Library/Geometry/Size.h"
+ #include "Engine/Objects/Item.h"
+ 
+ /**
+@@ -28,3 +31,10 @@ int itemOffset(int dimension);
+ Pointi mapToInventoryGrid(Pointi mousePos, Pointi inventoryTopLeft, Item *heldItem = nullptr);
+ 
+ Pointi mapFromInventoryGrid(Pointi gridPos, Pointi inventoryTopLeft);
++
++/**
++ * @param inventoryTopLeft              Screen position of the grid's top left corner.
++ * @param gridSize                      Size of the grid, in cells.
++ * @return                              Screen positions of the middles of all the grid's cells, row by row.
++ */
++std::vector<Pointi> inventoryCellCenters(Pointi inventoryTopLeft, Sizei gridSize);
+diff --git a/src/GUI/UI/UIHouses.cpp b/src/GUI/UI/UIHouses.cpp
+index a28c9df..3ed5b6d 100644
+--- a/src/GUI/UI/UIHouses.cpp
++++ b/src/GUI/UI/UIHouses.cpp
+@@ -1059,6 +1059,7 @@ void GUIWindow_House::Update() {
+     if (!window_SpeakInHouse) {
+         return;
+     }
++    _screenClickTargets.clear();
+     houseDialogManager();
+     if (!isShop(houseId())) {
+         return;
+diff --git a/src/GUI/UI/UIHouses.h b/src/GUI/UI/UIHouses.h
+index d47c9bb..6dcbc23 100644
+--- a/src/GUI/UI/UIHouses.h
++++ b/src/GUI/UI/UIHouses.h
+@@ -96,6 +96,15 @@ class GUIWindow_House : public GUIWindow {
+         _currentDialogue = dialogue;
+     }
+ 
++    /**
++     * @return                          Where clicks on the house screen (`UIMSG_HouseScreenClick`) do something: the
++     *                                  wares in shops, inventory cells when selling and the like. For gamepad menu
++     *                                  navigation. Collected while the screen is drawn, empty if there's nothing.
++     */
++    [[nodiscard]] const std::vector<Pointi> &screenClickTargets() const {
++        return _screenClickTargets;
++    }
++
+     void houseDialogManager();
+     void houseNPCDialogue();
+     void initializeProprietorDialogue();
+@@ -123,9 +132,13 @@ class GUIWindow_House : public GUIWindow {
+ 
+  protected:
+     void learnSkillsDialogue(Color selectColor);
++    void addScreenClickTarget(Recti rect) {
++        _screenClickTargets.push_back(rect.center());
++    }
+ 
+     HouseId _houseId = HOUSE_INVALID;
+     DialogueId _currentDialogue = DIALOGUE_NULL;
++    std::vector<Pointi> _screenClickTargets;
+     int _savedButtonsNum = 0;
+     bool _transactionPerformed = false;
+ };
+diff --git a/src/Io/MenuNavigation.cpp b/src/Io/MenuNavigation.cpp
+index 510c98b..f578dec 100644
+--- a/src/Io/MenuNavigation.cpp
++++ b/src/Io/MenuNavigation.cpp
+@@ -3,6 +3,7 @@
+ #include <cstdlib>
+ #include <limits>
+ 
++#include "Engine/EngineGlobals.h"
+ #include "Engine/Graphics/Renderer/Renderer.h"
+ #include "Engine/Objects/Chest.h"
+ #include "Engine/Party.h"
+@@ -10,15 +11,24 @@
+ 
+ #include "GUI/GUIButton.h"
+ #include "GUI/GUIWindow.h"
++#include "GUI/UI/ItemGrid.h"
+ #include "GUI/UI/UICharacter.h"
+ #include "GUI/UI/UIChest.h"
++#include "GUI/UI/UIHouses.h"
+ #include "GUI/UI/UISpell.h"
+ 
++#include "Io/Mouse.h"
++
+ #include "Library/Geometry/Rect.h"
++#include "Library/Platform/Interface/Platform.h"
+ 
+-static constexpr int CELL_SIZE = 32;
+ static constexpr Pointi CHARACTER_INVENTORY_TOP_LEFT = {14, 17};
+-static constexpr Sizei CHARACTER_INVENTORY_SIZE = {14, 9};
++
++// Holding a d-pad direction keeps moving: after the first delay, then every interval.
++static constexpr int64_t REPEAT_DELAY_MS = 300;
++static constexpr int64_t REPEAT_INTERVAL_MS = 70;
++static Pointi heldDirection;
++static int64_t nextRepeatTime = 0;
+ 
+ // Whether the window's own keyboard navigation (GUIWindow::setKeyboardControlGroup) works with a gamepad: it shows
+ // what's selected, and the dialog select binding isn't also one of the window's hotkeys. Then the menu navigation
+@@ -48,10 +58,8 @@ static std::vector<GUIWindow *> menuWindows() {
+     return result;
+ }
+ 
+-static void addGrid(std::vector<Pointi> *targets, Pointi topLeft, Sizei size) {
+-    for (int y = 0; y < size.h; y++)
+-        for (int x = 0; x < size.w; x++)
+-            targets->push_back(topLeft + Pointi(x * CELL_SIZE + CELL_SIZE / 2, y * CELL_SIZE + CELL_SIZE / 2));
++static void append(std::vector<Pointi> *targets, const std::vector<Pointi> &points) {
++    targets->insert(targets->end(), points.begin(), points.end());
+ }
+ 
+ std::vector<Pointi> Io::menuNavigationTargets() {
+@@ -65,15 +73,22 @@ std::vector<Pointi> Io::menuNavigationTargets() {
+             // Item areas are single big buttons, move between their cells and items instead.
+             switch (button->msg) {
+             case UIMSG_InventoryLeftClick:
+-                if (current_character_screen_window == WINDOW_CHARACTER_INVENTORY || current_screen_type == SCREEN_CHEST_INVENTORY)
+-                    addGrid(&result, CHARACTER_INVENTORY_TOP_LEFT, CHARACTER_INVENTORY_SIZE);
++                if ((current_character_screen_window == WINDOW_CHARACTER_INVENTORY || current_screen_type == SCREEN_CHEST_INVENTORY) &&
++                    pParty->hasActiveCharacter())
++                    append(&result, inventoryCellCenters(CHARACTER_INVENTORY_TOP_LEFT, pParty->activeCharacter().inventory.gridSize()));
+                 continue;
+             case UIMSG_CHEST_ClickItem:
+                 if (pGUIWindow_CurrentChest) {
+                     const Chest &chest = vChests[pGUIWindow_CurrentChest->chestId()];
+-                    addGrid(&result, chestTable[chest.chestTypeId].inventoryOffset, chest.inventory.gridSize());
++                    append(&result, inventoryCellCenters(chestTable[chest.chestTypeId].inventoryOffset, chest.inventory.gridSize()));
+                 }
+                 continue;
++            case UIMSG_HouseScreenClick:
++                if (window_SpeakInHouse && !window_SpeakInHouse->screenClickTargets().empty()) {
++                    append(&result, window_SpeakInHouse->screenClickTargets()); // Shop wares, inventory when selling.
++                    continue;
++                }
++                break;
+             case UIMSG_ClickPaperdoll:
+                 for (Pointi point : equipmentHitMap.visiblePoints(-1))
+                     result.push_back(point);
+@@ -119,6 +134,42 @@ std::optional<Pointi> Io::menuNavigationStep(const std::vector<Pointi> &targets,
+     return best;
+ }
+ 
++static void moveCursor(const std::vector<Pointi> &targets, Pointi direction) {
++    if (std::optional<Pointi> target = Io::menuNavigationStep(targets, mouse->position(), direction)) {
++        mouse->warpMouse(*target);
++        mouse->setPosition(*target);
++    }
++}
++
++bool Io::pressMenuNavigation(Pointi direction) {
++    std::vector<Pointi> targets = menuNavigationTargets();
++    if (targets.empty())
++        return false;
++
++    moveCursor(targets, direction);
++    heldDirection = direction;
++    nextRepeatTime = platform->tickCount() + REPEAT_DELAY_MS;
++    return true;
++}
++
++void Io::releaseMenuNavigation(Pointi direction) {
++    if (direction == heldDirection)
++        heldDirection = Pointi();
++}
++
++void Io::updateMenuNavigation() {
++    if (heldDirection == Pointi() || platform->tickCount() < nextRepeatTime)
++        return;
++
++    std::vector<Pointi> targets = menuNavigationTargets();
++    if (targets.empty()) {
++        heldDirection = Pointi(); // The menu closed.
++        return;
++    }
++    moveCursor(targets, heldDirection);
++    nextRepeatTime = platform->tickCount() + REPEAT_INTERVAL_MS;
++}
++
+ bool Io::isMenuNavigationClickable(Pointi point) {
+     for (GUIWindow *window : menuWindows())
+         for (GUIButton *button : window->vButtons)
+diff --git a/src/Io/MenuNavigation.h b/src/Io/MenuNavigation.h
+index 36f3d58..dad9b23 100644
+--- a/src/Io/MenuNavigation.h
++++ b/src/Io/MenuNavigation.h
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include <cstdint>
+ #include <optional>
+ #include <vector>
+ 
+@@ -27,6 +28,25 @@ std::vector<Pointi> menuNavigationTargets();
+  */
+ std::optional<Pointi> menuNavigationStep(const std::vector<Pointi> &targets, Pointi from, Pointi direction);
+ 
++/**
++ * Moves the mouse cursor one step in `direction` if a menu is open, and keeps moving it while the direction is held,
++ * see `updateMenuNavigation`.
++ *
++ * @param direction                     One of (0, -1), (0, 1), (-1, 0), (1, 0).
++ * @return                              Whether a menu is open, so that the press belongs to the navigation.
++ */
++bool pressMenuNavigation(Pointi direction);
++
++/**
++ * Stops the repeat of a direction that `pressMenuNavigation` started.
++ */
++void releaseMenuNavigation(Pointi direction);
++
++/**
++ * Repeats the held direction. Called every frame.
++ */
++void updateMenuNavigation();
++
+ /**
+  * @return                              Whether a click at `point` would land on something in the open menus.
+  */

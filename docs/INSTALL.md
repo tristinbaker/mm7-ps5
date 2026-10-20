@@ -52,7 +52,7 @@ Controller support is still in progress.
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
 | Options | Inventory | |
-| D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move the cursor to the next button, inventory cell or equipped item |
+| D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move the cursor to the next button or item; hold to keep moving |
 | Touchpad | Mouse cursor, see below | Mouse cursor |
 
 **The touchpad is the mouse**, like a laptop's: slide a finger to move the cursor, press the pad to click, and
@@ -64,9 +64,9 @@ To **rest**, click the campfire button at the bottom of the screen. The Create b
 keeps it for itself.
 
 **In menus** (the inventory, the spellbook, shops, the game menu and so on) the D-pad moves the cursor to the nearest
-button, inventory cell or equipped item in that direction, and Cross clicks it. When the cursor isn't on anything,
-Cross and Square do their menu shortcuts instead (for example Cross starts a new game in the game menu). Items on shop
-shelves can't be reached with the D-pad yet; use the touchpad for those.
+button, inventory cell, equipped item or shop item in that direction, and Cross clicks it. Hold a direction to keep
+moving. When the cursor isn't on anything,
+Cross and Square do their menu shortcuts instead (for example Cross starts a new game in the game menu).
 
 Character creation, conversations and the menus inside buildings keep their own D-pad controls: the D-pad moves the
 highlight and Cross picks it. In character creation, L1 and R1 lower and raise the highlighted stat, Triangle
