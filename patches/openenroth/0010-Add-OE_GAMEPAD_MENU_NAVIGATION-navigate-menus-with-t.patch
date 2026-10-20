@@ -1,0 +1,458 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 15:19:38 -0400
+Subject: [PATCH] Add OE_GAMEPAD_MENU_NAVIGATION: navigate menus with the d-pad
+ and the mouse cursor
+
+In menus the dialog d-pad bindings move the mouse cursor to the nearest thing to click in that direction: buttons,
+inventory and chest cells, equipped items on the paper doll (HitMap::visiblePoints). The dialog select binding
+clicks there and Square right-clicks, but only over something to click, so the menus' own gamepad hotkeys keep
+working elsewhere. Menus are the windows open above the game's interface, or all of them in the main menu.
+
+Most menus have no keyboard navigation, and the ones that do show no selection and lose it to the mouse every
+frame, so with a gamepad there was no way through the inventory or the game menu without a mouse. The touchpad
+mouse no longer hides its cursor in menus, it shows where the navigation is.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                        |   5 ++
+ src/Application/GameWindowHandler.cpp |  88 +++++++++++++++++++
+ src/Application/GameWindowHandler.h   |  12 +++
+ src/Engine/HitMap.h                   |  37 ++++++++
+ src/Io/CMakeLists.txt                 |   2 +
+ src/Io/MenuNavigation.cpp             | 117 ++++++++++++++++++++++++++
+ src/Io/MenuNavigation.h               |  35 ++++++++
+ src/Io/Mouse.cpp                      |   6 +-
+ 8 files changed, 301 insertions(+), 1 deletion(-)
+ create mode 100644 src/Io/MenuNavigation.cpp
+ create mode 100644 src/Io/MenuNavigation.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 47d5fa7..b88eb9a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -43,6 +43,7 @@ set(OE_USE_SANITIZERS "" CACHE STRING "Sanitizers to build with, passed on to -f
+ set(OE_GL33 OFF CACHE BOOL "Request an OpenGL 3.3 core context and GLSL 330 shaders instead of OpenGL 4.1.")
+ set(OE_USE_SDL2 OFF CACHE BOOL "Use SDL2 platform backend instead of SDL3, for platforms where only SDL2 is available.")
+ set(OE_PRESENT_WITH_DRAW OFF CACHE BOOL "Present the scaled frame by drawing a quad instead of glBlitFramebuffer, for drivers that blit on the CPU.")
++set(OE_GAMEPAD_MENU_NAVIGATION OFF CACHE BOOL "Navigate menus with a gamepad's d-pad by moving the mouse cursor between the things to click, and click with its buttons.")
+ set(OE_GAMEPAD_TOUCHPAD_MOUSE OFF CACHE BOOL "Use a gamepad's touchpad as a mouse (SDL2 backend), for platforms that have no mouse. The game then draws the cursor itself, and hides it when idle.")
+ 
+ if(OE_DISTRIBUTION_BUILD)
+@@ -61,6 +62,10 @@ if(OE_GAMEPAD_TOUCHPAD_MOUSE)
+     add_compile_definitions(OE_GAMEPAD_TOUCHPAD_MOUSE)
+ endif()
+ 
++if(OE_GAMEPAD_MENU_NAVIGATION)
++    add_compile_definitions(OE_GAMEPAD_MENU_NAVIGATION)
++endif()
++
+ if(OE_USE_SDL2)
+     add_compile_definitions(OE_USE_SDL2) # Selects ImGui SDL2 backend in the code that calls into it directly.
+ endif()
+diff --git a/src/Application/GameWindowHandler.cpp b/src/Application/GameWindowHandler.cpp
+index e00c4cb..f70ccad 100644
+--- a/src/Application/GameWindowHandler.cpp
++++ b/src/Application/GameWindowHandler.cpp
+@@ -1,6 +1,7 @@
+ #include "GameWindowHandler.h"
+ 
+ #include <algorithm>
++#include <optional>
+ #include <vector>
+ #include <tuple>
+ #include <string>
+@@ -26,6 +27,7 @@
+ 
+ #include "Io/InputEnums.h"
+ #include "Io/KeyboardInputHandler.h"
++#include "Io/MenuNavigation.h"
+ #include "Io/Mouse.h"
+ 
+ #include "Media/Audio/AudioPlayer.h"
+@@ -570,15 +572,101 @@ bool GameWindowHandler::gamepadConnectionEvent(const PlatformGamepadEvent *event
+ }
+ 
+ bool GameWindowHandler::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    if (menuNavigationKeyPress(event->key))
++        return true; // Not for KeyboardController either, these buttons mean other things in the game.
++#endif
+     handleKeyPress(event->key, 0, false);
+     return false;
+ }
+ 
+ bool GameWindowHandler::gamepadKeyReleaseEvent(const PlatformGamepadKeyEvent *event) {
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    if (menuNavigationKeyRelease(event->key))
++        return true;
++#endif
+     handleKeyRelease(event->key);
+     return false;
+ }
+ 
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++// In menus, the dialog d-pad bindings move the mouse cursor between the things to click (see Io/MenuNavigation.h),
++// the dialog select binding clicks and this button right-clicks, for item info and the like. The clicks only happen
++// over something to click, elsewhere the buttons keep doing what they do, like the menus' own hotkeys.
++static constexpr PlatformKey MENU_RIGHT_CLICK_KEY = PlatformKey::KEY_GAMEPAD_X;
++static constexpr int64_t MENU_DOUBLE_CLICK_MS = 500;
++
++bool GameWindowHandler::menuNavigationKeyPress(PlatformKey key) {
++    if (!mouse || pArcomageGame->_gameInProgress || currently_selected_action_for_binding != INPUT_ACTION_INVALID)
++        return false;
++
++    Pointi direction;
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_UP, key)) {
++        direction = Pointi(0, -1);
++    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_DOWN, key)) {
++        direction = Pointi(0, 1);
++    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_LEFT, key)) {
++        direction = Pointi(-1, 0);
++    } else if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_RIGHT, key)) {
++        direction = Pointi(1, 0);
++    }
++
++    if (direction != Pointi()) {
++        std::vector<Pointi> targets = Io::menuNavigationTargets();
++        if (targets.empty())
++            return false; // No menu open, the d-pad acts in the game.
++        if (std::optional<Pointi> target = Io::menuNavigationStep(targets, mouse->position(), direction)) {
++            mouse->warpMouse(*target);
++            OnMouseMove(*target, Pointi(), false, false);
++        }
++        return true;
++    }
++
++    PlatformMouseButton button = BUTTON_NONE;
++    if (keyboardActionMapping->isBound(INPUT_ACTION_DIALOG_PRESS, key)) {
++        button = BUTTON_LEFT;
++    } else if (key == MENU_RIGHT_CLICK_KEY) {
++        button = BUTTON_RIGHT;
++    }
++    if (button == BUTTON_NONE || _menuClickKey != PlatformKey::KEY_NONE || !Io::isMenuNavigationClickable(mouse->position()))
++        return false;
++
++    Pointi position = mouse->position();
++    _menuClickKey = key;
++    _menuClickButton = button;
++    if (button == BUTTON_RIGHT) {
++        OnMouseRightClick(position);
++        return true;
++    }
++
++    // Double clicks like dispatchMouseButtonEvent in the SDL backends: every second click in a row.
++    int64_t now = platform->tickCount();
++    bool again = now - _menuLastClickTime <= MENU_DOUBLE_CLICK_MS && position == _menuLastClickPosition;
++    _menuClicks = again ? _menuClicks + 1 : 1;
++    _menuLastClickTime = now;
++    _menuLastClickPosition = position;
++    if (_menuClicks % 2 == 0) {
++        OnMouseLeftDoubleClick(position);
++    } else {
++        OnMouseLeftClick(position, false);
++    }
++    return true;
++}
++
++bool GameWindowHandler::menuNavigationKeyRelease(PlatformKey key) {
++    if (key == PlatformKey::KEY_NONE || key != _menuClickKey)
++        return false;
++
++    _menuClickKey = PlatformKey::KEY_NONE;
++    if (_menuClickButton == BUTTON_LEFT) {
++        OnMouseLeftUp();
++    } else {
++        OnMouseRightUp();
++    }
++    return true;
++}
++#endif
++
+ bool GameWindowHandler::gamepadAxisEvent(const PlatformGamepadAxisEvent *event) {
+     PlatformKey key = event->axis;
+     float value = event->value;
+diff --git a/src/Application/GameWindowHandler.h b/src/Application/GameWindowHandler.h
+index b558e9f..b624f64 100644
+--- a/src/Application/GameWindowHandler.h
++++ b/src/Application/GameWindowHandler.h
+@@ -8,6 +8,7 @@
+ #include "Library/Platform/Interface/PlatformEnums.h"
+ #include "Library/Platform/Filters/PlatformEventFilter.h"
+ #include "Library/Platform/Application/PlatformApplicationAware.h"
++#include "Library/Geometry/Point.h"
+ #include "Library/Geometry/Size.h"
+ 
+ namespace Io {
+@@ -49,6 +50,10 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+ 
+     void handleKeyPress(PlatformKey key, PlatformModifiers mods, bool isAutoRepeat);
+     void handleKeyRelease(PlatformKey key);
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    bool menuNavigationKeyPress(PlatformKey key);
++    bool menuNavigationKeyRelease(PlatformKey key);
++#endif
+ 
+     virtual bool keyPressEvent(const PlatformKeyEvent *event) override;
+     virtual bool keyReleaseEvent(const PlatformKeyEvent *event) override;
+@@ -68,4 +73,11 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+  private:
+     std::shared_ptr<Io::Mouse> mouse = nullptr;
+     bool _closing = false;
++#ifdef OE_GAMEPAD_MENU_NAVIGATION
++    PlatformKey _menuClickKey = PlatformKey::KEY_NONE; // Gamepad button holding a menu click down.
++    PlatformMouseButton _menuClickButton = BUTTON_NONE;
++    int64_t _menuLastClickTime = 0;
++    Pointi _menuLastClickPosition;
++    int _menuClicks = 0;
++#endif
+ };
+diff --git a/src/Engine/HitMap.h b/src/Engine/HitMap.h
+index ffb9524..fcf9191 100644
+--- a/src/Engine/HitMap.h
++++ b/src/Engine/HitMap.h
+@@ -74,6 +74,43 @@ class HitMap {
+         return defaultValue;
+     }
+ 
++    /**
++     * @param defaultValue              Value to leave out.
++     * @return                          For every other value that's visible somewhere, a point where `query`
++     *                                  returns it, as close to the middle of its image as there is one.
++     */
++    std::vector<Pointi> visiblePoints(T defaultValue = {}) const {
++        std::vector<T> values;
++        std::vector<std::pair<Pointi, int>> best; // Point and its squared distance from the image center, per value.
++        for (const Entry &entry : _entries) {
++            if (entry.value == defaultValue)
++                continue;
++
++            Recti rect(entry.position, entry.image->size());
++            Pointi center = rect.center();
++            for (int y = rect.y; y < rect.y + rect.h; y += 2) {
++                for (int x = rect.x; x < rect.x + rect.w; x += 2) {
++                    Pointi point(x, y);
++                    if (query(point, defaultValue) != entry.value)
++                        continue;
++                    int distance = (x - center.x) * (x - center.x) + (y - center.y) * (y - center.y);
++                    auto pos = std::find(values.begin(), values.end(), entry.value);
++                    if (pos == values.end()) {
++                        values.push_back(entry.value);
++                        best.emplace_back(point, distance);
++                    } else if (distance < best[pos - values.begin()].second) {
++                        best[pos - values.begin()] = {point, distance};
++                    }
++                }
++            }
++        }
++
++        std::vector<Pointi> result;
++        for (const auto &[point, distance] : best)
++            result.push_back(point);
++        return result;
++    }
++
+  private:
+     struct Entry {
+         Pointi position;
+diff --git a/src/Io/CMakeLists.txt b/src/Io/CMakeLists.txt
+index 80c126c..ad7cc9e 100644
+--- a/src/Io/CMakeLists.txt
++++ b/src/Io/CMakeLists.txt
+@@ -5,6 +5,7 @@ set(IO_SOURCES
+         InputEnumFunctions.cpp
+         KeyboardActionMapping.cpp
+         KeyboardInputHandler.cpp
++        MenuNavigation.cpp
+         Mouse.cpp)
+ 
+ set(IO_HEADERS
+@@ -13,6 +14,7 @@ set(IO_HEADERS
+         InputEnumFunctions.h
+         KeyboardActionMapping.h
+         KeyboardInputHandler.h
++        MenuNavigation.h
+         Mouse.h)
+ 
+ add_library(io STATIC ${IO_SOURCES} ${IO_HEADERS})
+diff --git a/src/Io/MenuNavigation.cpp b/src/Io/MenuNavigation.cpp
+new file mode 100644
+index 0000000..6e031ea
+--- /dev/null
++++ b/src/Io/MenuNavigation.cpp
+@@ -0,0 +1,117 @@
++#include "MenuNavigation.h"
++
++#include <cstdlib>
++#include <limits>
++
++#include "Engine/Graphics/Renderer/Renderer.h"
++#include "Engine/Objects/Chest.h"
++#include "Engine/Party.h"
++#include "Engine/Tables/ChestTable.h"
++
++#include "GUI/GUIButton.h"
++#include "GUI/GUIWindow.h"
++#include "GUI/UI/UICharacter.h"
++#include "GUI/UI/UIChest.h"
++#include "GUI/UI/UISpell.h"
++
++#include "Library/Geometry/Rect.h"
++
++static constexpr int CELL_SIZE = 32;
++static constexpr Pointi CHARACTER_INVENTORY_TOP_LEFT = {14, 17};
++static constexpr Sizei CHARACTER_INVENTORY_SIZE = {14, 9};
++
++// Windows the menu navigation works in, topmost first.
++static std::vector<GUIWindow *> menuWindows() {
++    if (pGUIWindow_CastTargetedSpell)
++        return {pGUIWindow_CastTargetedSpell.get()}; // Like clicks, see Io::Mouse::UI_OnMouseLeftClick.
++
++    std::vector<GUIWindow *> result;
++    Recti screen(Pointi(0, 0), render->GetRenderDimensions());
++    for (GUIWindow *window : lWindowList) {
++        if (window == pPrimaryWindow.get())
++            break; // The game's own interface isn't a menu.
++        result.push_back(window);
++        if (window->frameRect == screen)
++            break; // Covers everything below.
++    }
++    return result;
++}
++
++static void addGrid(std::vector<Pointi> *targets, Pointi topLeft, Sizei size) {
++    for (int y = 0; y < size.h; y++)
++        for (int x = 0; x < size.w; x++)
++            targets->push_back(topLeft + Pointi(x * CELL_SIZE + CELL_SIZE / 2, y * CELL_SIZE + CELL_SIZE / 2));
++}
++
++std::vector<Pointi> Io::menuNavigationTargets() {
++    std::vector<Pointi> result;
++    Recti screen(Pointi(0, 0), render->GetRenderDimensions());
++    for (GUIWindow *window : menuWindows()) {
++        for (GUIButton *button : window->vButtons) {
++            if (button->rect.w <= 0 || button->rect.h <= 0)
++                continue; // Hotkey-only button.
++
++            // Item areas are single big buttons, move between their cells and items instead.
++            switch (button->msg) {
++            case UIMSG_InventoryLeftClick:
++                if (current_character_screen_window == WINDOW_CHARACTER_INVENTORY || current_screen_type == SCREEN_CHEST_INVENTORY)
++                    addGrid(&result, CHARACTER_INVENTORY_TOP_LEFT, CHARACTER_INVENTORY_SIZE);
++                continue;
++            case UIMSG_CHEST_ClickItem:
++                if (pGUIWindow_CurrentChest) {
++                    const Chest &chest = vChests[pGUIWindow_CurrentChest->chestId()];
++                    addGrid(&result, chestTable[chest.chestTypeId].inventoryOffset, chest.inventory.gridSize());
++                }
++                continue;
++            case UIMSG_ClickPaperdoll:
++                for (Pointi point : equipmentHitMap.visiblePoints(-1))
++                    result.push_back(point);
++                if (pParty->pPickedItem.itemId != ITEM_NULL)
++                    result.push_back(button->rect.center()); // Anywhere on the doll equips.
++                continue;
++            default:
++                break;
++            }
++
++            if (screen.contains(button->rect.center()))
++                result.push_back(button->rect.center());
++        }
++    }
++    return result;
++}
++
++std::optional<Pointi> Io::menuNavigationStep(const std::vector<Pointi> &targets, Pointi from, Pointi direction) {
++    std::optional<Pointi> best, nearest;
++    long bestScore = std::numeric_limits<long>::max(), nearestDistance = std::numeric_limits<long>::max();
++    bool onTarget = false;
++    for (Pointi target : targets) {
++        Pointi offset = target - from;
++        long along = offset.x * direction.x + offset.y * direction.y;
++        long across = std::abs(offset.x * direction.y - offset.y * direction.x);
++        onTarget |= along == 0 && across == 0;
++
++        long distance = std::abs(offset.x) + std::abs(offset.y);
++        if (distance < nearestDistance) {
++            nearestDistance = distance;
++            nearest = target;
++        }
++
++        long score = along + 2 * across; // Prefer what's in line over what's closer but off to the side.
++        if (along > 0 && score < bestScore) {
++            bestScore = score;
++            best = target;
++        }
++    }
++
++    if (!best && !onTarget)
++        return nearest;
++    return best;
++}
++
++bool Io::isMenuNavigationClickable(Pointi point) {
++    for (GUIWindow *window : menuWindows())
++        for (GUIButton *button : window->vButtons)
++            if (button->rect.w > 0 && button->rect.h > 0 && button->rect.contains(point))
++                return true;
++    return false;
++}
+diff --git a/src/Io/MenuNavigation.h b/src/Io/MenuNavigation.h
+new file mode 100644
+index 0000000..5e5e5f1
+--- /dev/null
++++ b/src/Io/MenuNavigation.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include <optional>
++#include <vector>
++
++#include "Library/Geometry/Point.h"
++
++// Gamepad navigation in menus with the mouse cursor (OE_GAMEPAD_MENU_NAVIGATION): the d-pad moves the cursor to the
++// nearest thing to click in its direction, and a gamepad button clicks where the cursor is. Menus are the windows open
++// over the game's own interface, or all windows when there is none (the main menu). Positions are in render
++// coordinates.
++namespace Io {
++
++/**
++ * @return                              Points the cursor can move to in the open menus: the middle of every button,
++ *                                      inventory and chest cells, equipped items. Empty if no menu is open.
++ */
++std::vector<Pointi> menuNavigationTargets();
++
++/**
++ * @param targets                       Result of `menuNavigationTargets`.
++ * @param from                          Cursor position.
++ * @param direction                     One of (0, -1), (0, 1), (-1, 0), (1, 0).
++ * @return                              The target to move the cursor to: the nearest one in `direction`, preferring
++ *                                      ones in line with `from`. If there's none and `from` isn't on a target, the
++ *                                      nearest target. Otherwise `std::nullopt`.
++ */
++std::optional<Pointi> menuNavigationStep(const std::vector<Pointi> &targets, Pointi from, Pointi direction);
++
++/**
++ * @return                              Whether a click at `point` would land on something in the open menus.
++ */
++bool isMenuNavigationClickable(Pointi point);
++
++} // namespace Io
+diff --git a/src/Io/Mouse.cpp b/src/Io/Mouse.cpp
+index 9376345..33f9546 100644
+--- a/src/Io/Mouse.cpp
++++ b/src/Io/Mouse.cpp
+@@ -49,7 +49,11 @@ Pointi Io::Mouse::setPosition(Pointi position) {
+ 
+ bool Io::Mouse::arrowIdle() const {
+ #ifdef OE_GAMEPAD_TOUCHPAD_MOUSE
+-    // With a touchpad for a mouse the arrow is in the way most of the time, so it only shows while it's being used.
++    // With a touchpad for a mouse the arrow is in the way of the game most of the time, so there it only shows while
++    // it's being used. Menus need it, it shows where the gamepad's menu navigation is.
++    bool inGame = lWindowList.size() == 1 && lWindowList.front() == pPrimaryWindow.get();
++    if (!inGame)
++        return false;
+     return !_lastMoveTime || platform->tickCount() - *_lastMoveTime > 3000;
+ #else
+     return false;

@@ -1,4 +1,4 @@
-# Installing OpenEnroth (Might and Magic VII) on a PS5
+# Installing Might and Magic VII (OpenEnroth) on a PS5
 
 ## What you need
 
@@ -27,7 +27,7 @@
 
    It uploads the title to `/data/homebrew/PPSA99967` and then your game files. Running it again only sends
    what changed.
-4. **OpenEnroth (Might and Magic VII)** appears on the home screen within a few seconds. If it doesn't, restart
+4. **Might and Magic VII: For Blood and Honor** appears on the home screen within a few seconds. If it doesn't, restart
    ShadowMountPlus.
 
 To update to a newer release, run the installer from the new download with `--program-only`; your game files
@@ -41,9 +41,9 @@ Controller support is still in progress.
 | --- | --- | --- |
 | Left stick | Walk, strafe | |
 | Right stick | Turn, look up and down | |
-| Cross | Interact: talk, open, pick up | Select, New Game |
+| Cross | Interact: talk, open, pick up | Click what the cursor is on |
 | Circle | Game menu: save, load, quit | Back: close the current screen, No |
-| Square | Attack | Load Game |
+| Square | Attack | Right-click what the cursor is on: hold for item and spell info |
 | Triangle | Jump; fly up while flying | Save Game, Credits |
 | L1 | Spellbook | |
 | R1 | Cast the quick spell | Spellbook: make the selected spell the quick spell; Options (main menu); Rest 8 hours (rest menu) |
@@ -52,20 +52,24 @@ Controller support is still in progress.
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
 | Options | Inventory | |
-| D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move between choices |
+| D-pad | Down: next character; Up: notes; Left: map; Right: quests | Move the cursor to the next button, inventory cell or equipped item |
 | Touchpad | Mouse cursor, see below | Mouse cursor |
 
 **The touchpad is the mouse**, like a laptop's: slide a finger to move the cursor, press the pad to click, and
-press it with two fingers on it to right-click (hold for the info pop-ups). The cursor appears when you touch the
-pad and hides again after a few seconds. Use it for the inventory, spellbook, shops and anything else that needs a
+press it with two fingers on it to right-click (hold for the info pop-ups). In the game view the cursor appears when you
+touch the pad and hides again after a few seconds; in menus it stays. Use it for the inventory, spellbook, shops and anything else that needs a
 mouse.
 
 To **rest**, click the campfire button at the bottom of the screen. The Create button can't be used: the console
 keeps it for itself.
 
-To **set the quick spell**, open the spellbook (L1), pick a spell with the touchpad (or step through the page with D-pad
-up; D-pad down turns to the next school), and press R1. R1
-then casts it in the game. Pressing Cross on the selected spell casts it straight away.
+**In menus** (the inventory, the spellbook, shops, the game menu and so on) the D-pad moves the cursor to the nearest
+button, inventory cell or equipped item in that direction, and Cross clicks it. When the cursor isn't on anything,
+Cross and Square do their menu shortcuts instead (for example Cross starts a new game in the game menu). Items on shop
+shelves can't be reached with the D-pad yet; use the touchpad for those.
+
+To **set the quick spell**, open the spellbook (L1), move to a spell, press Cross to select it, and press R1. R1 then
+casts it in the game. Pressing Cross again on the selected spell casts it straight away.
 
 To **save**, open the game menu (Circle), choose Save, click an empty slot, then click Save. The name starts as your
 location; click Save again to keep it.

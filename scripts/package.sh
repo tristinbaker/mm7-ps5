@@ -20,7 +20,7 @@ oe_build=$MM_PS5_BUILD/openenroth
 link_inputs=$oe_build/src/Bin/OpenEnroth/OpenEnroth.link-inputs
 out=$MM_PS5_BUILD/title
 title_id=PPSA99967
-title_name="OpenEnroth (Might and Magic VII)"
+title_name="Might and Magic VII: For Blood and Honor"
 content_id="UP9000-${title_id}_00-OPENENROTHMM7001"
 action=${1:-}
 
