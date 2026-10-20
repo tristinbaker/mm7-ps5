@@ -53,6 +53,17 @@ def ensure_directory(ftp: FTP, path: str, known: set) -> None:
         known.add(current)
 
 
+def delete(ftp: FTP, path: str) -> None:
+    """Deletes a remote file if it exists. ftpsrv answers DELE with 226 rather than 250, which ftplib rejects."""
+    try:
+        ftp.sendcmd(f"DELE {path}")
+    except error_perm:
+        pass  # Not there.
+    except error_reply as reply:
+        if not str(reply).startswith("2"):
+            raise
+
+
 def remote_size(ftp: FTP, path: str) -> int | None:
     try:
         return ftp.size(path)
@@ -67,12 +78,10 @@ def upload(ftp: FTP, local: Path, remote: str, known: set, force: bool, label: s
         return False
     ensure_directory(ftp, remote.rsplit("/", 1)[0], known)
     temporary = remote + ".upload"
+    delete(ftp, temporary)
     with local.open("rb") as stream:
         ftp.storbinary(f"STOR {temporary}", stream, blocksize=1 << 20)
-    try:
-        ftp.delete(remote)
-    except error_perm:
-        pass
+    delete(ftp, remote)
     ftp.rename(temporary, remote)
     # The console only starts an app whose files are open to everyone. ftpsrv already writes them that way;
     # other FTP servers may not, and some don't support SITE CHMOD at all.
