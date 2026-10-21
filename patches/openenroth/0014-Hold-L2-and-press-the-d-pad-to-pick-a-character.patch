@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tristin Baker <tristinbaker@protonmail.com>
+Date: Tue, 20 Oct 2026 20:00:56 -0400
+Subject: [PATCH] Hold L2 and press the d-pad to pick a character
+
+Left, up, right and down pick the 1st to 4th character while L2 is held, through the select character actions
+the 1-4 keys trigger (the portrait buttons' hotkeys, so spell targeting gets the target that way too). Cycling
+through the party one at a time was slow, and in menus the d-pad moves the cursor.
+---
+ src/Application/GameWindowHandler.cpp | 33 +++++++++++++++++++++++++++
+ src/Application/GameWindowHandler.h   |  3 ++-
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/src/Application/GameWindowHandler.cpp b/src/Application/GameWindowHandler.cpp
+index 1257755..35a33e6 100644
+--- a/src/Application/GameWindowHandler.cpp
++++ b/src/Application/GameWindowHandler.cpp
+@@ -22,6 +22,7 @@
+ #include "Engine/EngineIocContainer.h"
+ #include "Engine/Timer.h"
+ 
++#include "GUI/GUIButton.h"
+ #include "GUI/GUIWindow.h"
+ #include "GUI/GUIMessageQueue.h"
+ 
+@@ -573,6 +574,8 @@ bool GameWindowHandler::gamepadConnectionEvent(const PlatformGamepadEvent *event
+ 
+ bool GameWindowHandler::gamepadKeyPressEvent(const PlatformGamepadKeyEvent *event) {
+ #ifdef OE_GAMEPAD_MENU_NAVIGATION
++    if (characterChordKeyPress(event->key))
++        return true;
+     if (menuNavigationKeyPress(event->key))
+         return true; // Not for KeyboardController either, these buttons mean other things in the game.
+ #endif
+@@ -646,6 +649,36 @@ bool GameWindowHandler::menuNavigationKeyPress(PlatformKey key) {
+     return true;
+ }
+ 
++// Holding L2 turns the d-pad into picking a character: left, up, right and down pick the 1st to 4th, the way the
++// 1-4 keys do (they're the portrait buttons' hotkeys, so in spell targeting they pick the target). Cycling through the
++// party one character at a time is slow, and in menus the d-pad moves the cursor.
++static constexpr std::pair<PlatformKey, InputAction> CHARACTER_CHORDS[] = {
++    {PlatformKey::KEY_GAMEPAD_LEFT, INPUT_ACTION_SELECT_CHAR_1},
++    {PlatformKey::KEY_GAMEPAD_UP, INPUT_ACTION_SELECT_CHAR_2},
++    {PlatformKey::KEY_GAMEPAD_RIGHT, INPUT_ACTION_SELECT_CHAR_3},
++    {PlatformKey::KEY_GAMEPAD_DOWN, INPUT_ACTION_SELECT_CHAR_4},
++};
++
++bool GameWindowHandler::characterChordKeyPress(PlatformKey key) {
++    if (!_menuTriggerDown || pArcomageGame->_gameInProgress || currently_selected_action_for_binding != INPUT_ACTION_INVALID)
++        return false;
++
++    for (auto [chordKey, action] : CHARACTER_CHORDS) {
++        if (key != chordKey)
++            continue;
++        for (GUIWindow *window : lWindowList) { // Like GUI_HandleHotkey, the topmost window's button wins.
++            for (GUIButton *button : window->vButtons) {
++                if (button->action == action) {
++                    engine->_messageQueue->addMessageCurrentFrame(button->msg, button->msg_param, 0);
++                    return true;
++                }
++            }
++        }
++        return true; // No party here (the main menu), the d-pad still shouldn't do anything else.
++    }
++    return false;
++}
++
+ bool GameWindowHandler::menuNavigationKeyRelease(PlatformKey key) {
+     if (Pointi direction = menuNavigationDirection(key); direction != Pointi())
+         Io::releaseMenuNavigation(direction); // And let it through, whoever got the press.
+diff --git a/src/Application/GameWindowHandler.h b/src/Application/GameWindowHandler.h
+index 958a65b..61cc370 100644
+--- a/src/Application/GameWindowHandler.h
++++ b/src/Application/GameWindowHandler.h
+@@ -53,6 +53,7 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+ #ifdef OE_GAMEPAD_MENU_NAVIGATION
+     bool menuNavigationKeyPress(PlatformKey key);
+     bool menuNavigationKeyRelease(PlatformKey key);
++    bool characterChordKeyPress(PlatformKey key);
+ #endif
+ 
+     virtual bool keyPressEvent(const PlatformKeyEvent *event) override;
+@@ -76,7 +77,7 @@ class GameWindowHandler : public PlatformEventFilter, private PlatformApplicatio
+ #ifdef OE_GAMEPAD_MENU_NAVIGATION
+     PlatformKey _menuClickKey = PlatformKey::KEY_NONE; // Gamepad button holding a menu click down.
+     PlatformMouseButton _menuClickButton = BUTTON_NONE;
+-    bool _menuTriggerDown = false; // Whether MENU_RIGHT_CLICK_KEY's trigger is past the threshold.
++    bool _menuTriggerDown = false; // Whether MENU_RIGHT_CLICK_KEY's trigger (L2) is past the threshold.
+     int64_t _menuLastClickTime = 0;
+     Pointi _menuLastClickPosition;
+     int _menuClicks = 0;

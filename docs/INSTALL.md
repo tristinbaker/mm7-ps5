@@ -48,6 +48,7 @@ Controller support is still in progress.
 | L1 | Spellbook | |
 | R1 | Cast the quick spell | Spellbook: make the selected spell the quick spell; Options (main menu); Rest 8 hours (rest menu) |
 | L2 | Fly down | Right-click what the cursor is on: hold for item and spell info |
+| L2 + D-pad | Pick a character: ← 1st, ↑ 2nd, → 3rd, ↓ 4th | Same (also picks a spell's target) |
 | R2 | Turn-based mode on/off | |
 | L3 (press left stick) | Always run on/off | |
 | R3 (press right stick) | Pass the turn (turn-based mode) | |
